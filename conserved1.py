@@ -109,45 +109,136 @@ class NCBIGenomeAnalyzer:
             }]
     
     def _get_viroid_search_terms(self, species: str) -> List[str]:
-        """Generate viroid-specific search terms"""
-        return [
-            f'"{species}"[Organism] AND viroid',
-            f'{species}[Organism] AND viroid',
-            f'"{species}" AND viroid AND complete',
-            f'{species} viroid complete',
-            f'{species} viroid',
-            f'viroid AND {species.split()[0]}' if len(species.split()) > 1 else f'viroid AND {species}',
-            f'"{species}"[Organism]',
-            f'{species}[Organism]'
-        ]
+        """Generate comprehensive viroid-specific search terms"""
+        # Extract key terms from species name
+        terms = species.lower().split()
+        base_terms = []
+        
+        # Handle different viroid naming patterns
+        if "viroid" in species.lower():
+            # Already contains viroid
+            base_name = species.replace(" viroid", "").replace(" Viroid", "")
+            base_terms.append(base_name)
+        else:
+            base_terms.append(species)
+        
+        # Add common abbreviations
+        if "hop latent" in species.lower():
+            base_terms.extend(["HpLVd", "HLVd", "hop latent"])
+        elif "potato spindle tuber" in species.lower():
+            base_terms.extend(["PSTVd", "potato spindle tuber"])
+        elif "citrus exocortis" in species.lower():
+            base_terms.extend(["CEVd", "citrus exocortis"])
+        elif "chrysanthemum stunt" in species.lower():
+            base_terms.extend(["CSVd", "chrysanthemum stunt"])
+        
+        search_terms = []
+        
+        # Build comprehensive search strategy
+        for base_term in base_terms:
+            search_terms.extend([
+                f'"{base_term}"[Organism] AND viroid',
+                f'{base_term}[Organism] AND viroid',
+                f'"{base_term} viroid"[Title]',
+                f'{base_term} viroid[Title]',
+                f'"{base_term}" AND viroid AND complete',
+                f'{base_term} viroid complete',
+                f'{base_term} viroid sequence',
+                f'"{base_term}"[Organism]',
+                f'{base_term}[Organism]'
+            ])
+        
+        # Add generic viroid searches
+        if len(terms) > 1:
+            genus = terms[0]
+            search_terms.extend([
+                f'{genus}[Organism] AND viroid',
+                f'viroid AND {genus}',
+                f'{genus} viroid'
+            ])
+        
+        # Remove duplicates while preserving order
+        unique_terms = []
+        for term in search_terms:
+            if term not in unique_terms:
+                unique_terms.append(term)
+        
+        return unique_terms
     
     def _get_virus_search_terms(self, species: str) -> List[str]:
-        """Generate virus-specific search terms"""
-        return [
-            f'"{species}"[Organism] AND "complete genome"',
-            f'"{species}"[Organism] AND genome',
-            f'{species}[Organism] AND "complete genome"',
-            f'{species}[Organism] AND genome',
-            f'"{species}" AND "complete genome"',
-            f'{species} complete genome',
-            f'"{species}"[Organism]',
-            f'{species}[Organism]'
-        ]
+        """Generate comprehensive virus-specific search terms"""
+        base_terms = [species]
+        
+        # Add common virus abbreviations
+        if "tobacco mosaic" in species.lower():
+            base_terms.extend(["TMV", "tobacco mosaic"])
+        elif "sars" in species.lower():
+            base_terms.extend(["SARS-CoV-2", "SARS-CoV", "coronavirus"])
+        elif "influenza" in species.lower():
+            base_terms.extend(["flu", "influenza"])
+        
+        search_terms = []
+        
+        for base_term in base_terms:
+            search_terms.extend([
+                f'"{base_term}"[Organism] AND "complete genome"',
+                f'"{base_term}"[Organism] AND genome',
+                f'{base_term}[Organism] AND "complete genome"',
+                f'{base_term}[Organism] AND genome',
+                f'"{base_term}" AND "complete genome"',
+                f'{base_term} complete genome',
+                f'{base_term} genome',
+                f'"{base_term}"[Organism]',
+                f'{base_term}[Organism]'
+            ])
+        
+        # Add genus-level searches
+        terms = species.split()
+        if len(terms) > 1:
+            genus = terms[0]
+            search_terms.extend([
+                f'{genus}[Organism] AND "complete genome"',
+                f'{genus}[Organism] AND virus',
+                f'{genus} virus'
+            ])
+        
+        return list(dict.fromkeys(search_terms))  # Remove duplicates
     
     def _get_standard_search_terms(self, species: str) -> List[str]:
-        """Generate search terms for bacteria/eukaryotes"""
-        return [
-            f'"{species}"[Organism] AND "complete genome"',
-            f'"{species}"[Organism] AND chromosome',
-            f'{species}[Organism] AND "complete genome"',
-            f'{species}[Organism] AND chromosome',
-            f'"{species}" AND "complete genome"',
-            f'{species} complete genome',
-            f'{species} chromosome',
-            f'"{species}"[Organism]',
-            f'{species}[Organism]',
-            f'{species.split()[0]}[Organism] AND "complete genome"' if len(species.split()) > 1 else None
-        ]
+        """Generate comprehensive search terms for bacteria/eukaryotes"""
+        base_terms = [species]
+        
+        search_terms = []
+        
+        for base_term in base_terms:
+            search_terms.extend([
+                f'"{base_term}"[Organism] AND "complete genome"',
+                f'"{base_term}"[Organism] AND chromosome',
+                f'"{base_term}"[Organism] AND "reference genome"',
+                f'{base_term}[Organism] AND "complete genome"',
+                f'{base_term}[Organism] AND chromosome',
+                f'{base_term}[Organism] AND "reference genome"',
+                f'"{base_term}" AND "complete genome"',
+                f'{base_term} complete genome',
+                f'{base_term} chromosome',
+                f'{base_term} genome',
+                f'"{base_term}"[Organism]',
+                f'{base_term}[Organism]'
+            ])
+        
+        # Add genus and species-level searches
+        terms = species.split()
+        if len(terms) >= 2:
+            genus = terms[0]
+            species_epithet = terms[1]
+            search_terms.extend([
+                f'{genus}[Organism] AND "complete genome"',
+                f'{genus}[Organism] AND chromosome',
+                f'{genus} {species_epithet}[Organism]',
+                f'{genus} {species_epithet} genome'
+            ])
+        
+        return list(dict.fromkeys(search_terms))  # Remove duplicates
     
     def _process_sequence_batch(self, id_list: List[str], species: str, size_filter, max_results: int) -> List[Dict]:
         """Process sequence IDs with robust error handling"""

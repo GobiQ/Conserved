@@ -1497,7 +1497,7 @@ def main():
         # Most conserved regions with sequences
         st.subheader("Most Conserved Regions with Sequences")
         
-        highly_conserved_regions = df_results[df_results['conservation_score'] >= 0.8].copy()
+        highly_conserved_regions = df_results[df_results['conservation_score'] >= 0.5].copy()
         
         if not highly_conserved_regions.empty:
             highly_conserved_regions = highly_conserved_regions.sort_values('conservation_score', ascending=False)

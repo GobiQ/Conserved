@@ -681,13 +681,30 @@ def main():
                 else:
                     st.error("❌ Failed to fetch genome sequence. Try a different sequence.")
     
-    # Debug: Check what's in session state
-    st.write("Debug - Session state keys:", list(st.session_state.keys()))
-    if 'comparative_results' in st.session_state:
-        st.write("Debug - Comparative results shape:", st.session_state['comparative_results'].shape)
+    # Display single sequence results (for when only 1 viroid sequence available)
+    if 'single_results' in st.session_state:
+        st.header("Single Viroid Sequence Analysis")
+        
+        df_results = st.session_state['single_results']
+        sequence = st.session_state['analyzed_sequence']
+        
+        st.info(f"Analyzed sequence: {len(sequence)} bp")
+        
+        # Simple visualization
+        fig = px.line(df_results, x='start', y='gc_content', title='GC Content Along Sequence')
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Show sequence windows
+        st.subheader("Sequence Windows")
+        display_results = df_results.head(10)
+        st.dataframe(display_results)
+        
+        # Show full sequence
+        with st.expander("Full Sequence"):
+            st.code(sequence)
     
-    # Display comparative results
-    if 'comparative_results' in st.session_state and not st.session_state['comparative_results'].empty:
+    # Debug session state and display comparative results
+    if 'comparative_results' in st.session_state:
         organism_type = st.session_state.get('organism_type', 'Unknown')
         
         st.header("🔬 Comparative Conservation Analysis Results")

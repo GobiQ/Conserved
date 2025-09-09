@@ -483,6 +483,256 @@ class NCBIGenomeAnalyzer:
         
         return consensus
 
+def create_conservation_map(sequences: Dict[str, str], results_df: pd.DataFrame) -> go.Figure:
+    """Create a clear graphical conservation map with color-coded regions"""
+    
+    # Create conservation regions data
+    genome_length = min(len(seq) for seq in sequences.values())
+    
+    # Define conservation levels with clear colors
+    conservation_levels = []
+    colors = []
+    
+    for _, row in results_df.iterrows():
+        start = row['start']
+        end = row['end']
+        conservation = row['conservation_score']
+        
+        # Color code based on conservation level
+        if conservation >= 0.9:
+            color = 'darkgreen'
+            level = 'Highly Conserved (90%+)'
+        elif conservation >= 0.8:
+            color = 'green'
+            level = 'Conserved (80-90%)'
+        elif conservation >= 0.6:
+            color = 'yellow'
+            level = 'Moderately Conserved (60-80%)'
+        elif conservation >= 0.4:
+            color = 'orange'
+            level = 'Poorly Conserved (40-60%)'
+        else:
+            color = 'red'
+            level = 'Variable (<40%)'
+        
+        conservation_levels.append({
+            'start': start,
+            'end': end,
+            'conservation': conservation,
+            'level': level,
+            'color': color
+        })
+    
+    # Create the conservation map visualization
+    fig = go.Figure()
+    
+    # Add conservation regions as colored bars
+    for region in conservation_levels:
+        fig.add_trace(go.Scatter(
+            x=[region['start'], region['end']],
+            y=[1, 1],
+            mode='lines',
+            line=dict(color=region['color'], width=8),
+            name=region['level'],
+            showlegend=False,
+            hovertemplate=f"Position: {region['start']}-{region['end']}<br>" +
+                         f"Conservation: {region['conservation']:.1%}<br>" +
+                         f"Level: {region['level']}<extra></extra>"
+        ))
+    
+    # Add conservation score as a line plot above
+    fig.add_trace(go.Scatter(
+        x=results_df['start'],
+        y=results_df['conservation_score'] + 1.5,
+        mode='lines',
+        name='Conservation Score',
+        line=dict(color='purple', width=2),
+        hovertemplate='Position: %{x}<br>Conservation: %{customdata:.1%}<extra></extra>',
+        customdata=results_df['conservation_score']
+    ))
+    
+    # Add legend manually
+    legend_traces = [
+        go.Scatter(x=[None], y=[None], mode='lines', line=dict(color='darkgreen', width=8), name='Highly Conserved (90%+)'),
+        go.Scatter(x=[None], y=[None], mode='lines', line=dict(color='green', width=8), name='Conserved (80-90%)'),
+        go.Scatter(x=[None], y=[None], mode='lines', line=dict(color='yellow', width=8), name='Moderately Conserved (60-80%)'),
+        go.Scatter(x=[None], y=[None], mode='lines', line=dict(color='orange', width=8), name='Poorly Conserved (40-60%)'),
+        go.Scatter(x=[None], y=[None], mode='lines', line=dict(color='red', width=8), name='Variable (<40%)')
+    ]
+    
+    for trace in legend_traces:
+        fig.add_trace(trace)
+    
+    fig.update_layout(
+        title="Genome Conservation Map - Color-Coded by Conservation Level",
+        xaxis_title="Genomic Position (bp)",
+        yaxis_title="Conservation Level",
+        height=400,
+        yaxis=dict(
+            tickvals=[1, 2],
+            ticktext=['Conservation Regions', 'Conservation Score'],
+            range=[0.5, 2.5]
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5
+        )
+    )
+    
+    return fig
+
+def create_sequence_alignment_view(sequences: Dict[str, str], results_df: pd.DataFrame) -> go.Figure:
+    """Create a sequence alignment view showing all sequences with conservation coloring"""
+    
+    seq_ids = list(sequences.keys())
+    seq_list = list(sequences.values())
+    
+    # Limit to reasonable display length
+    display_length = min(1000, min(len(seq) for seq in seq_list))
+    
+    fig = go.Figure()
+    
+    # Color map for bases
+    base_colors = {'A': 'red', 'T': 'blue', 'G': 'green', 'C': 'orange', 'U': 'blue', 'N': 'gray', '-': 'white'}
+    
+    # Create a heatmap-style visualization
+    for i, (seq_id, sequence) in enumerate(sequences.items()):
+        # Get conservation scores for positions
+        conservation_scores = []
+        for pos in range(1, display_length + 1):
+            # Find conservation score for this position
+            conservation = 0
+            for _, row in results_df.iterrows():
+                if row['start'] <= pos <= row['end']:
+                    conservation = row['conservation_score']
+                    break
+            conservation_scores.append(conservation)
+        
+        # Create sequence display with conservation background
+        fig.add_trace(go.Scatter(
+            x=list(range(1, display_length + 1)),
+            y=[i] * display_length,
+            mode='markers',
+            marker=dict(
+                size=8,
+                color=conservation_scores,
+                colorscale='RdYlGn',  # Red-Yellow-Green scale
+                cmin=0,
+                cmax=1,
+                colorbar=dict(title="Conservation Score") if i == 0 else None,
+                line=dict(width=0.5, color='black')
+            ),
+            text=[sequence[j] for j in range(display_length)],
+            textposition="middle center",
+            textfont=dict(size=8, color='black'),
+            name=seq_id,
+            hovertemplate=f'{seq_id}<br>Position: %{{x}}<br>Base: %{{text}}<br>Conservation: %{{marker.color:.2f}}<extra></extra>'
+        ))
+    
+    fig.update_layout(
+        title=f"Multi-Sequence Alignment View (First {display_length} bp)",
+        xaxis_title="Genomic Position (bp)",
+        yaxis_title="Sequences",
+        yaxis=dict(
+            tickvals=list(range(len(seq_ids))),
+            ticktext=seq_ids,
+            autorange='reversed'
+        ),
+        height=max(300, len(seq_ids) * 40),
+        showlegend=False
+    )
+    
+    return fig
+
+def create_detailed_conservation_heatmap(sequences: Dict[str, str], results_df: pd.DataFrame) -> go.Figure:
+    """Create a detailed heatmap showing conservation at each position"""
+    
+    seq_ids = list(sequences.keys())
+    seq_list = list(sequences.values())
+    
+    # Calculate conservation at each position
+    min_length = min(len(seq) for seq in seq_list)
+    display_length = min(500, min_length)  # Limit for performance
+    
+    position_conservation = []
+    
+    for pos in range(display_length):
+        # Get bases at this position from all sequences
+        bases_at_pos = [seq[pos] for seq in seq_list]
+        
+        # Calculate conservation (fraction of sequences with most common base)
+        base_counts = {}
+        for base in bases_at_pos:
+            base_counts[base] = base_counts.get(base, 0) + 1
+        
+        max_count = max(base_counts.values())
+        conservation = max_count / len(bases_at_pos)
+        position_conservation.append(conservation)
+    
+    # Create heatmap data
+    heatmap_data = []
+    for seq in seq_list:
+        row = []
+        for pos in range(display_length):
+            # Use conservation score as the value, but color by base type
+            base = seq[pos]
+            conservation = position_conservation[pos]
+            
+            # Encode base type and conservation
+            if base == 'A':
+                value = conservation + 0.0
+            elif base in ['T', 'U']:
+                value = conservation + 1.0
+            elif base == 'G':
+                value = conservation + 2.0
+            elif base == 'C':
+                value = conservation + 3.0
+            else:
+                value = conservation + 4.0  # N or gap
+            
+            row.append(value)
+        heatmap_data.append(row)
+    
+    # Create custom colorscale
+    colorscale = [
+        [0.0, 'lightcoral'],    # Low conservation A
+        [0.2, 'red'],          # High conservation A
+        [0.25, 'lightblue'],   # Low conservation T/U
+        [0.45, 'blue'],        # High conservation T/U
+        [0.5, 'lightgreen'],   # Low conservation G
+        [0.7, 'green'],        # High conservation G
+        [0.75, 'lightyellow'], # Low conservation C
+        [0.95, 'orange'],      # High conservation C
+        [1.0, 'gray']          # N/gaps
+    ]
+    
+    fig = go.Figure(data=go.Heatmap(
+        z=heatmap_data,
+        x=list(range(1, display_length + 1)),
+        y=seq_ids,
+        colorscale=colorscale,
+        showscale=True,
+        colorbar=dict(
+            title="Base Type & Conservation",
+            tickvals=[0.1, 1.1, 2.1, 3.1, 4.1],
+            ticktext=["A", "T/U", "G", "C", "N/Gap"]
+        ),
+        hovertemplate='Sequence: %{y}<br>Position: %{x}<br>Conservation: %{customdata:.2f}<extra></extra>',
+        customdata=[[position_conservation[j] for j in range(display_length)] for _ in range(len(seq_list))]
+    ))
+    
+    fig.update_layout(
+        title=f"Conservation Heatmap by Position (First {display_length} bp)",
+        xaxis_title="Genomic Position (bp)",
+        yaxis_title="Sequences",
+        height=max(400, len(seq_ids) * 30)
+    )
+    
+    return fig
+
 def create_alignment_heatmap(sequences: Dict[str, str], results_df: pd.DataFrame) -> go.Figure:
     """Create a heatmap showing sequence alignment across all positions"""
     seq_ids = list(sequences.keys())
@@ -897,74 +1147,75 @@ def main():
         
         current_organism_type = st.session_state.get('organism_type', organism_type)
         
-        # FORCE viroid mode for small sequences OR viroid selection
-        if current_organism_type == "Viroid" or any(seq['length'] <= 500 for seq in st.session_state['sequences']):
-            st.success("VIROID MODE: Comparative Analysis Only")
-            st.warning("Individual sequence selection disabled - viroids require multi-sequence comparison")
-            st.info(f"Using parameters: {window_size}bp windows, {step_size}bp steps")
-            
-            if st.button("Analyze ALL Viroid Sequences", type="primary"):
-                analyzer = NCBIGenomeAnalyzer(email, "Viroid")
-                sequence_ids = [seq['sequence_id'] for seq in st.session_state['sequences']]
-                
-                with st.spinner("Performing comparative analysis..."):
-                    try:
-                        sequences = analyzer.fetch_all_sequences_simultaneously(sequence_ids)
-                        
-                        if len(sequences) < 1:
-                            st.error("Could not fetch any sequences")
-                            return
-                        
-                        if len(sequences) == 1:
-                            st.warning("Only 1 sequence - showing composition analysis")
-                            seq_id = list(sequences.keys())[0]
-                            sequence = sequences[seq_id]
-                            
-                            results = []
-                            for pos in range(0, len(sequence) - window_size + 1, step_size):
-                                window_seq = sequence[pos:pos + window_size]
-                                gc_content = (window_seq.count('G') + window_seq.count('C')) / len(window_seq) * 100
-                                
-                                results.append({
-                                    'start': pos + 1,
-                                    'end': pos + window_size,
-                                    'gc_content': gc_content,
-                                    'sequence': window_seq
-                                })
-                            
-                            df_results = pd.DataFrame(results)
-                            st.session_state['single_results'] = df_results
-                            st.session_state['analyzed_sequence'] = sequence
-                            st.rerun()
-                        
-                        else:
-                            df_analysis = analyzer.true_comparative_analysis(sequences, window_size, step_size)
-                            
-                            if not df_analysis.empty:
-                                st.session_state['comparative_results'] = df_analysis
-                                st.session_state['compared_sequences'] = sequences
-                                st.session_state['num_sequences_compared'] = len(sequences)
-                                st.success(f"Analysis complete! {len(df_analysis)} windows analyzed")
-                                st.rerun()
-                            else:
-                                st.error("Analysis produced no results")
-                                
-                    except Exception as e:
-                        st.error(f"Analysis failed: {e}")
-                        import traceback
-                        st.code(traceback.format_exc())
+        # ALWAYS use comparative analysis for ALL organisms
+        st.success(f"{current_organism_type.upper()} MODE: Comparative Conservation Analysis")
+        st.info("All available sequences will be compared to find conserved regions across multiple genomes/isolates")
+        st.info(f"Using optimized parameters: {window_size}bp windows, {step_size}bp steps")
         
-        else:
-            st.info(f"Large genome mode: {current_organism_type}")
+        # Show how many sequences will be analyzed
+        num_available = len(st.session_state['sequences'])
+        num_to_analyze = min(num_available, max_sequences)
+        
+        st.write(f"**Available sequences:** {num_available}")
+        st.write(f"**Will analyze:** {num_to_analyze} (limited by max_sequences parameter)")
+        
+        if st.button("Analyze ALL Sequences for Conservation", type="primary"):
+            analyzer = NCBIGenomeAnalyzer(email, current_organism_type)
+            sequence_ids = [seq['sequence_id'] for seq in st.session_state['sequences']]
             
-            selected_sequence = st.selectbox(
-                "Select sequence for analysis:",
-                options=[s['sequence_id'] for s in st.session_state['sequences']],
-                format_func=lambda x: f"{x} - {next((s['title'][:40] + '...' if len(s['title']) > 40 else s['title']) for s in st.session_state['sequences'] if s['sequence_id'] == x)} ({next(s['length'] for s in st.session_state['sequences'] if s['sequence_id'] == x):,} bp)"
-            )
-            
-            if st.button("Analyze Selected Sequence", type="primary"):
-                st.info("Single sequence analysis for large genomes - implementation pending")
+            with st.spinner(f"Performing comparative conservation analysis on {num_to_analyze} sequences..."):
+                try:
+                    # Fetch sequences
+                    sequences = analyzer.fetch_all_sequences_simultaneously(sequence_ids[:num_to_analyze])
+                    
+                    if len(sequences) < 1:
+                        st.error("Could not fetch any sequences")
+                        return
+                    
+                    if len(sequences) == 1:
+                        st.warning("Only 1 sequence available - showing composition analysis")
+                        st.info("Note: True conservation analysis requires multiple sequences for comparison")
+                        
+                        # Single sequence composition analysis
+                        seq_id = list(sequences.keys())[0]
+                        sequence = sequences[seq_id]
+                        
+                        results = []
+                        for pos in range(0, len(sequence) - window_size + 1, step_size):
+                            window_seq = sequence[pos:pos + window_size]
+                            gc_content = (window_seq.count('G') + window_seq.count('C')) / len(window_seq) * 100
+                            
+                            results.append({
+                                'start': pos + 1,
+                                'end': pos + window_size,
+                                'gc_content': gc_content,
+                                'sequence': window_seq
+                            })
+                        
+                        df_results = pd.DataFrame(results)
+                        st.session_state['single_results'] = df_results
+                        st.session_state['analyzed_sequence'] = sequence
+                        st.rerun()
+                    
+                    else:
+                        # Multi-sequence comparative analysis
+                        st.success(f"Fetched {len(sequences)} sequences - performing comparative analysis")
+                        
+                        df_analysis = analyzer.true_comparative_analysis(sequences, window_size, step_size)
+                        
+                        if not df_analysis.empty:
+                            st.session_state['comparative_results'] = df_analysis
+                            st.session_state['compared_sequences'] = sequences
+                            st.session_state['num_sequences_compared'] = len(sequences)
+                            st.success(f"Comparative analysis complete! {len(df_analysis)} windows analyzed")
+                            st.rerun()
+                        else:
+                            st.error("Analysis produced no results")
+                            
+                except Exception as e:
+                    st.error(f"Analysis failed: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
     
     # Display single sequence results
     if 'single_results' in st.session_state:

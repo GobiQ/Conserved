@@ -10,7 +10,6 @@ try:
     from Bio.SeqUtils import GC
 except ImportError:
     # For newer versions of Biopython
-    from Bio.SeqUtils.ProtParam import ProteinAnalysis
     def GC(seq):
         seq = seq.upper()
         gc_count = seq.count('G') + seq.count('C')
@@ -43,147 +42,241 @@ class NCBIGenomeAnalyzer:
     def search_genomes(self, species: str, max_results: int = 20) -> List[Dict]:
         """Search for genome assemblies for a given species"""
         try:
-            # Search for genome assemblies
-            search_term = f'{species}[Organism] AND "latest refseq"[filter]'
-            handle = Entrez.esearch(
-                db="assembly", 
-                term=search_term, 
-                retmax=max_results,
-                sort="relevance"
-            )
-            search_results = Entrez.read(handle)
-            handle.close()
-            
-            if not search_results['IdList']:
-                return []
-            
-            # Get assembly details
-            handle = Entrez.esummary(db="assembly", id=','.join(search_results['IdList']))
-            summaries = Entrez.read(handle)
-            handle.close()
+            # More robust search strategy
+            search_terms = [
+                f'"{species}"[Organism] AND "latest refseq"[filter]',
+                f'"{species}"[Organism] AND "reference genome"[filter]',
+                f'"{species}"[Organism]'
+            ]
             
             assemblies = []
             
+            for search_term in search_terms:
+                try:
+                    st.info(f"Trying search: {search_term}")
+                    
+                    # Add retry logic with exponential backoff
+                    for attempt in range(3):
+                        try:
+                            handle = Entrez.esearch(
+                                db="assembly", 
+                                term=search_term, 
+                                retmax=max_results,
+                                sort="relevance"
+                            )
+                            search_results = Entrez.read(handle)
+                            handle.close()
+                            break
+                        except Exception as retry_error:
+                            if attempt == 2:  # Last attempt
+                                raise retry_error
+                            time.sleep(2 ** attempt)  # Exponential backoff
+                            st.warning(f"Retrying search (attempt {attempt + 2}/3)...")
+                    
+                    if not search_results.get('IdList'):
+                        continue
+                    
+                    st.success(f"Found {len(search_results['IdList'])} assembly IDs")
+                    
+                    # Get assembly details with better error handling
+                    try:
+                        # Process in smaller batches to avoid timeouts
+                        batch_size = 5
+                        id_list = search_results['IdList']
+                        
+                        for i in range(0, len(id_list), batch_size):
+                            batch_ids = id_list[i:i+batch_size]
+                            
+                            # Add retry logic for summary fetch
+                            for attempt in range(3):
+                                try:
+                                    handle = Entrez.esummary(db="assembly", id=','.join(batch_ids))
+                                    summaries = Entrez.read(handle)
+                                    handle.close()
+                                    break
+                                except Exception as retry_error:
+                                    if attempt == 2:
+                                        st.warning(f"Failed to fetch details for batch {i//batch_size + 1}")
+                                        continue
+                                    time.sleep(1)
+                            
+                            # Process summaries
+                            batch_assemblies = self._process_summaries(summaries, species)
+                            assemblies.extend(batch_assemblies)
+                    
+                    except Exception as summary_error:
+                        st.warning(f"Error fetching assembly details: {str(summary_error)}")
+                        # Create minimal entries from IDs
+                        for assembly_id in search_results['IdList'][:max_results]:
+                            assemblies.append({
+                                'assembly_id': assembly_id,
+                                'assembly_name': f"Assembly {assembly_id}",
+                                'organism': species,
+                                'level': 'Unknown',
+                                'stats': {}
+                            })
+                    
+                    if assemblies:
+                        break  # Found assemblies, stop trying other search terms
+                        
+                except Exception as search_error:
+                    st.warning(f"Search failed for term '{search_term}': {str(search_error)}")
+                    continue
+            
+            return assemblies[:max_results]
+            
+        except Exception as e:
+            st.error(f"Error in genome search: {str(e)}")
+            return []
+    
+    def _process_summaries(self, summaries, species: str) -> List[Dict]:
+        """Process assembly summaries with robust error handling"""
+        assemblies = []
+        
+        try:
             # Handle different response formats from esummary
             if isinstance(summaries, dict):
-                # If summaries is a dict, it might be keyed by ID
-                summaries_list = list(summaries.values())
+                if 'DocumentSummarySet' in summaries:
+                    summaries_list = summaries['DocumentSummarySet']['DocumentSummary']
+                elif 'DocSum' in summaries:
+                    summaries_list = summaries['DocSum']
+                else:
+                    # Try to extract values if it's a dict keyed by ID
+                    summaries_list = list(summaries.values())
             else:
-                # If it's already a list
                 summaries_list = summaries
+            
+            # Ensure it's a list
+            if not isinstance(summaries_list, list):
+                summaries_list = [summaries_list]
             
             for summary in summaries_list:
                 try:
-                    # Safely access dictionary keys with fallbacks
-                    assembly_id = summary.get('AssemblyAccession', summary.get('AccessionVersion', 'Unknown'))
-                    assembly_name = summary.get('AssemblyName', summary.get('AssemblyName', 'Unknown'))
-                    organism = summary.get('Organism', summary.get('SpeciesName', 'Unknown'))
-                    level = summary.get('AssemblyLevel', summary.get('AssemblyLevel', 'Unknown'))
-                    stats = summary.get('AssemblyStats', summary.get('Stats', {}))
+                    # More robust field extraction
+                    assembly_id = self._safe_get(summary, ['AssemblyAccession', 'AccessionVersion', 'Id'], 'Unknown')
+                    assembly_name = self._safe_get(summary, ['AssemblyName', 'Title'], f'Assembly {assembly_id}')
+                    organism = self._safe_get(summary, ['Organism', 'SpeciesName', 'OrganismName'], species)
+                    level = self._safe_get(summary, ['AssemblyLevel', 'Level'], 'Unknown')
+                    stats = self._safe_get(summary, ['AssemblyStats', 'Stats'], {})
                     
                     assemblies.append({
-                        'assembly_id': assembly_id,
-                        'assembly_name': assembly_name,
-                        'organism': organism,
-                        'level': level,
+                        'assembly_id': str(assembly_id),
+                        'assembly_name': str(assembly_name),
+                        'organism': str(organism),
+                        'level': str(level),
                         'stats': stats
                     })
+                    
                 except Exception as item_error:
-                    # Skip problematic entries but continue processing
-                    st.warning(f"Skipping assembly due to parsing error: {str(item_error)}")
+                    st.warning(f"Skipping problematic assembly: {str(item_error)}")
                     continue
             
-            return assemblies
-            
-        except Exception as e:
-            st.error(f"Error searching genomes: {str(e)}")
-            # Add debug information
-            st.error(f"Debug info - search_term: {search_term if 'search_term' in locals() else 'Not defined'}")
-            
-            # Try a simpler search as fallback
-            try:
-                st.info("Trying simpler search method...")
-                return self._simple_genome_search(species, max_results)
-            except Exception as fallback_error:
-                st.error(f"Fallback search also failed: {str(fallback_error)}")
-                return []
+        except Exception as process_error:
+            st.error(f"Error processing summaries: {str(process_error)}")
+        
+        return assemblies
     
-    def _simple_genome_search(self, species: str, max_results: int = 20) -> List[Dict]:
-        """Simpler genome search as fallback"""
-        try:
-            # Simple search without filters
-            search_term = f'{species}[Organism]'
-            handle = Entrez.esearch(
-                db="assembly", 
-                term=search_term, 
-                retmax=max_results,
-                sort="relevance"
-            )
-            search_results = Entrez.read(handle)
-            handle.close()
-            
-            if not search_results['IdList']:
-                return []
-            
-            # Get basic assembly info
-            assemblies = []
-            for assembly_id in search_results['IdList'][:max_results]:
-                assemblies.append({
-                    'assembly_id': assembly_id,
-                    'assembly_name': f"Assembly {assembly_id}",
-                    'organism': species,
-                    'level': 'Unknown',
-                    'stats': {}
-                })
-            
-            return assemblies
-            
-        except Exception as e:
-            st.error(f"Simple search failed: {str(e)}")
-            return []
+    def _safe_get(self, data: dict, keys: List[str], default: str = 'Unknown'):
+        """Safely get value from nested dict with multiple possible keys"""
+        for key in keys:
+            if isinstance(data, dict) and key in data:
+                value = data[key]
+                if value and str(value).strip():
+                    return value
+        return default
     
     def fetch_genome_sequence(self, assembly_id: str, chromosome: str = "1") -> Optional[str]:
-        """Fetch genome sequence for a specific chromosome"""
+        """Fetch genome sequence for a specific chromosome with improved error handling"""
         try:
-            # Search for nucleotide sequences
-            search_term = f'{assembly_id}[Assembly] AND chromosome {chromosome}'
-            handle = Entrez.esearch(db="nucleotide", term=search_term, retmax=1)
-            search_results = Entrez.read(handle)
-            handle.close()
+            # Multiple search strategies
+            search_strategies = [
+                f'{assembly_id}[Assembly] AND chromosome {chromosome}[Title]',
+                f'{assembly_id}[Assembly] AND chromosome {chromosome}',
+                f'{assembly_id}[Assembly] AND "chromosome {chromosome}"',
+                f'{assembly_id}[Assembly]'  # Fallback to any sequence from assembly
+            ]
             
-            if not search_results['IdList']:
+            nucl_id = None
+            
+            for search_term in search_strategies:
+                try:
+                    st.info(f"Searching for sequence: {search_term}")
+                    
+                    handle = Entrez.esearch(db="nucleotide", term=search_term, retmax=5)
+                    search_results = Entrez.read(handle)
+                    handle.close()
+                    
+                    if search_results.get('IdList'):
+                        nucl_id = search_results['IdList'][0]
+                        st.success(f"Found sequence ID: {nucl_id}")
+                        break
+                        
+                except Exception as search_error:
+                    st.warning(f"Search strategy failed: {str(search_error)}")
+                    continue
+            
+            if not nucl_id:
+                st.error("No sequences found for this assembly")
                 return None
             
-            # Fetch the sequence (limit to first 1MB for demo purposes)
-            nucl_id = search_results['IdList'][0]
-            handle = Entrez.efetch(
-                db="nucleotide", 
-                id=nucl_id, 
-                rettype="fasta", 
-                retmode="text",
-                seq_start=1,
-                seq_stop=1000000  # Limit to 1MB for performance
-            )
-            sequence_data = handle.read()
-            handle.close()
+            # Fetch the sequence with size limits
+            max_sequence_length = 2000000  # 2MB limit for performance
             
-            # Parse FASTA
-            sequences = list(SeqIO.parse(io.StringIO(sequence_data), "fasta"))
-            if sequences:
-                return str(sequences[0].seq)
-            
-            return None
+            try:
+                # Get sequence info first
+                handle = Entrez.esummary(db="nucleotide", id=nucl_id)
+                seq_info = Entrez.read(handle)
+                handle.close()
+                
+                # Determine fetch parameters
+                seq_length = int(seq_info[0].get('Length', max_sequence_length))
+                fetch_length = min(seq_length, max_sequence_length)
+                
+                st.info(f"Fetching {fetch_length:,} bp from sequence of length {seq_length:,} bp")
+                
+                # Fetch sequence
+                handle = Entrez.efetch(
+                    db="nucleotide", 
+                    id=nucl_id, 
+                    rettype="fasta", 
+                    retmode="text",
+                    seq_start=1,
+                    seq_stop=fetch_length
+                )
+                sequence_data = handle.read()
+                handle.close()
+                
+                # Parse FASTA
+                sequences = list(SeqIO.parse(io.StringIO(sequence_data), "fasta"))
+                if sequences:
+                    return str(sequences[0].seq)
+                else:
+                    st.error("Failed to parse FASTA sequence")
+                    return None
+                    
+            except Exception as fetch_error:
+                st.error(f"Error fetching sequence: {str(fetch_error)}")
+                return None
             
         except Exception as e:
-            st.error(f"Error fetching sequence: {str(e)}")
+            st.error(f"Error in sequence fetch: {str(e)}")
             return None
     
     def sliding_window_analysis(self, sequence: str, window_size: int = 1000, step_size: int = 500) -> pd.DataFrame:
         """Perform sliding window analysis on the sequence"""
         results = []
         
-        for i in range(0, len(sequence) - window_size + 1, step_size):
-            window_seq = sequence[i:i + window_size]
+        # Ensure sequence is valid
+        if not sequence or len(sequence) < window_size:
+            st.error(f"Sequence too short for analysis. Length: {len(sequence) if sequence else 0}, Required: {window_size}")
+            return pd.DataFrame()
+        
+        # Add progress bar for long sequences
+        total_windows = (len(sequence) - window_size) // step_size + 1
+        progress_bar = st.progress(0)
+        
+        for i, pos in enumerate(range(0, len(sequence) - window_size + 1, step_size)):
+            window_seq = sequence[pos:pos + window_size]
             
             # Calculate various metrics
             gc_content = GC(window_seq)
@@ -196,15 +289,20 @@ class NCBIGenomeAnalyzer:
             repeat_content = self._calculate_repeat_content(window_seq)
             
             results.append({
-                'start': i + 1,
-                'end': i + window_size,
+                'start': pos + 1,
+                'end': pos + window_size,
                 'gc_content': gc_content,
                 'at_content': at_content,
                 'entropy': entropy,
                 'repeat_content': repeat_content,
                 'length': window_size
             })
+            
+            # Update progress
+            if i % 100 == 0:  # Update every 100 windows
+                progress_bar.progress(min(i / total_windows, 1.0))
         
+        progress_bar.progress(1.0)
         return pd.DataFrame(results)
     
     def _calculate_entropy(self, sequence: str) -> float:
@@ -213,10 +311,12 @@ class NCBIGenomeAnalyzer:
             return 0.0
         
         # Count nucleotides
-        counts = {'A': 0, 'T': 0, 'G': 0, 'C': 0}
+        counts = {'A': 0, 'T': 0, 'G': 0, 'C': 0, 'N': 0}
         for base in sequence.upper():
             if base in counts:
                 counts[base] += 1
+            else:
+                counts['N'] += 1  # Unknown bases
         
         # Calculate entropy
         total = sum(counts.values())
@@ -250,6 +350,9 @@ class NCBIGenomeAnalyzer:
     
     def identify_conserved_regions(self, df: pd.DataFrame) -> pd.DataFrame:
         """Identify potentially conserved regions based on various criteria"""
+        if df.empty:
+            return pd.DataFrame()
+        
         # Define conservation criteria
         conserved_mask = (
             (df['gc_content'] >= 40) & (df['gc_content'] <= 60) &  # Moderate GC content
@@ -258,13 +361,48 @@ class NCBIGenomeAnalyzer:
         )
         
         conserved_regions = df[conserved_mask].copy()
-        conserved_regions['conservation_score'] = (
-            (2 - abs(df.loc[conserved_mask, 'gc_content'] - 50) / 50) * 0.3 +
-            (df.loc[conserved_mask, 'entropy'] / 2) * 0.4 +
-            ((100 - df.loc[conserved_mask, 'repeat_content']) / 100) * 0.3
-        )
         
-        return conserved_regions.sort_values('conservation_score', ascending=False)
+        if not conserved_regions.empty:
+            conserved_regions['conservation_score'] = (
+                (2 - abs(conserved_regions['gc_content'] - 50) / 50) * 0.3 +
+                (conserved_regions['entropy'] / 2) * 0.4 +
+                ((100 - conserved_regions['repeat_content']) / 100) * 0.3
+            )
+            
+            return conserved_regions.sort_values('conservation_score', ascending=False)
+        else:
+            return pd.DataFrame()
+
+def test_ncbi_connection(email: str) -> bool:
+    """Test NCBI connection with better error reporting"""
+    try:
+        Entrez.email = email
+        
+        # Test with a simple, reliable search
+        handle = Entrez.esearch(db="assembly", term="Escherichia coli", retmax=1)
+        test_results = Entrez.read(handle)
+        handle.close()
+        
+        if test_results.get('IdList'):
+            return True
+        else:
+            st.warning("NCBI connection working but no test results found")
+            return False
+            
+    except Exception as e:
+        st.error(f"NCBI connection test failed: {str(e)}")
+        
+        # Check for common issues
+        if "HTTP Error 429" in str(e):
+            st.error("Rate limit exceeded. Please wait and try again.")
+        elif "HTTP Error 403" in str(e):
+            st.error("Access forbidden. Check your email address.")
+        elif "timeout" in str(e).lower():
+            st.error("Connection timeout. Check your internet connection.")
+        else:
+            st.error("Unknown connection error. Please verify your email and internet connection.")
+        
+        return False
 
 def main():
     st.title("🧬 Genome Conservation Analysis Tool")
@@ -284,16 +422,29 @@ def main():
             help="NCBI requires an email address for API access"
         )
         
-        if not email:
-            st.warning("Please provide an email address to use NCBI services")
+        if not email or '@' not in email:
+            st.warning("Please provide a valid email address to use NCBI services")
             st.stop()
         
-        # Species selection
-        species = st.text_input(
-            "Species name:",
-            value="Homo sapiens",
-            help="Enter the scientific name of the species"
+        # Species selection with examples
+        st.subheader("Species Selection")
+        example_species = st.selectbox(
+            "Choose example or enter custom:",
+            ["Custom", "Homo sapiens", "Escherichia coli", "Saccharomyces cerevisiae", "Drosophila melanogaster"]
         )
+        
+        if example_species == "Custom":
+            species = st.text_input(
+                "Species name:",
+                placeholder="Enter scientific name",
+                help="Enter the scientific name of the species (e.g., 'Homo sapiens')"
+            )
+        else:
+            species = example_species
+        
+        if not species:
+            st.warning("Please enter a species name")
+            st.stop()
         
         # Analysis parameters
         st.subheader("Analysis Parameters")
@@ -301,48 +452,41 @@ def main():
         step_size = st.slider("Step size (bp):", 100, 2000, 500, 50)
         max_assemblies = st.slider("Max assemblies to search:", 5, 50, 20, 5)
     
-    # Initialize analyzer
-    analyzer = NCBIGenomeAnalyzer(email)
-    
     # Main interface
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        if st.button("Search Genome Assemblies", type="primary"):
-            with st.spinner("Searching NCBI for genome assemblies..."):
+        if st.button("🔍 Search Genome Assemblies", type="primary"):
+            # Initialize analyzer
+            analyzer = NCBIGenomeAnalyzer(email)
+            
+            with st.spinner(f"Searching NCBI for {species} genome assemblies..."):
                 assemblies = analyzer.search_genomes(species, max_assemblies)
             
             if assemblies:
                 st.session_state['assemblies'] = assemblies
-                st.success(f"Found {len(assemblies)} genome assemblies")
+                st.session_state['species'] = species
+                st.success(f"✅ Found {len(assemblies)} genome assemblies for {species}")
             else:
-                st.error("No genome assemblies found for the specified species")
+                st.error(f"❌ No genome assemblies found for '{species}'. Try a different species name or check spelling.")
     
     with col2:
-        if st.button("Test NCBI Connection"):
+        if st.button("🔗 Test NCBI Connection"):
             with st.spinner("Testing NCBI connection..."):
-                try:
-                    # Simple test search
-                    handle = Entrez.esearch(db="assembly", term="Escherichia coli", retmax=1)
-                    test_results = Entrez.read(handle)
-                    handle.close()
-                    
-                    if test_results.get('IdList'):
-                        st.success("✅ NCBI connection successful!")
-                    else:
-                        st.warning("⚠️ NCBI connection working but no results found")
-                except Exception as e:
-                    st.error(f"❌ NCBI connection failed: {str(e)}")
+                if test_ncbi_connection(email):
+                    st.success("✅ NCBI connection successful!")
+                else:
+                    st.error("❌ NCBI connection failed")
     
     # Display assemblies
-    if 'assemblies' in st.session_state:
-        st.subheader("Available Genome Assemblies")
+    if 'assemblies' in st.session_state and 'species' in st.session_state:
+        st.subheader(f"Available Genome Assemblies for {st.session_state['species']}")
         
         assembly_data = []
         for assembly in st.session_state['assemblies']:
             assembly_data.append({
                 'Assembly ID': assembly['assembly_id'],
-                'Assembly Name': assembly['assembly_name'],
+                'Assembly Name': assembly['assembly_name'][:50] + '...' if len(assembly['assembly_name']) > 50 else assembly['assembly_name'],
                 'Organism': assembly['organism'],
                 'Level': assembly['level']
             })
@@ -354,38 +498,49 @@ def main():
         selected_assembly = st.selectbox(
             "Select assembly for analysis:",
             options=[a['assembly_id'] for a in st.session_state['assemblies']],
-            format_func=lambda x: f"{x} - {next(a['assembly_name'] for a in st.session_state['assemblies'] if a['assembly_id'] == x)}"
+            format_func=lambda x: f"{x} - {next((a['assembly_name'][:30] + '...' if len(a['assembly_name']) > 30 else a['assembly_name']) for a in st.session_state['assemblies'] if a['assembly_id'] == x)}"
         )
         
-        chromosome = st.text_input("Chromosome/scaffold:", value="1")
+        chromosome = st.text_input("Chromosome/scaffold:", value="1", help="Enter chromosome number or scaffold name")
         
-        if st.button("Analyze Conservation", type="primary"):
+        if st.button("🧬 Analyze Conservation", type="primary"):
+            if not selected_assembly:
+                st.error("Please select an assembly for analysis")
+                return
+            
+            # Initialize analyzer
+            analyzer = NCBIGenomeAnalyzer(email)
+            
             with st.spinner("Fetching genome sequence and performing analysis..."):
                 # Fetch sequence
                 sequence = analyzer.fetch_genome_sequence(selected_assembly, chromosome)
                 
                 if sequence:
-                    st.success(f"Successfully fetched {len(sequence):,} bp sequence")
+                    st.success(f"✅ Successfully fetched {len(sequence):,} bp sequence")
                     
                     # Perform sliding window analysis
                     df_analysis = analyzer.sliding_window_analysis(
                         sequence, window_size, step_size
                     )
                     
-                    # Identify conserved regions
-                    conserved_regions = analyzer.identify_conserved_regions(df_analysis)
-                    
-                    # Store results
-                    st.session_state['analysis_results'] = df_analysis
-                    st.session_state['conserved_regions'] = conserved_regions
-                    st.session_state['sequence_length'] = len(sequence)
-                    
+                    if not df_analysis.empty:
+                        # Identify conserved regions
+                        conserved_regions = analyzer.identify_conserved_regions(df_analysis)
+                        
+                        # Store results
+                        st.session_state['analysis_results'] = df_analysis
+                        st.session_state['conserved_regions'] = conserved_regions
+                        st.session_state['sequence_length'] = len(sequence)
+                        st.session_state['selected_assembly'] = selected_assembly
+                        st.session_state['chromosome'] = chromosome
+                    else:
+                        st.error("Analysis failed - no windows could be processed")
                 else:
-                    st.error("Failed to fetch genome sequence")
+                    st.error("❌ Failed to fetch genome sequence. Try a different chromosome or assembly.")
     
     # Display results
-    if 'analysis_results' in st.session_state:
-        st.header("Analysis Results")
+    if 'analysis_results' in st.session_state and not st.session_state['analysis_results'].empty:
+        st.header("📊 Analysis Results")
         
         df_results = st.session_state['analysis_results']
         conserved_regions = st.session_state['conserved_regions']
@@ -400,17 +555,17 @@ def main():
         with col3:
             st.metric("Conserved Regions", len(conserved_regions))
         with col4:
-            conservation_percentage = (len(conserved_regions) / len(df_results)) * 100
+            conservation_percentage = (len(conserved_regions) / len(df_results)) * 100 if len(df_results) > 0 else 0
             st.metric("Conservation %", f"{conservation_percentage:.1f}%")
         
         # Visualization
-        st.subheader("Genomic Landscape")
+        st.subheader("📈 Genomic Landscape")
         
         # Create subplot
         fig = make_subplots(
             rows=4, cols=1,
             shared_xaxes=True,
-            subplot_titles=('GC Content', 'Sequence Complexity (Entropy)', 'Repeat Content', 'Conservation Score'),
+            subplot_titles=('GC Content (%)', 'Sequence Complexity (Entropy)', 'Repeat Content (%)', 'Conservation Score'),
             vertical_spacing=0.05
         )
         
@@ -444,13 +599,13 @@ def main():
                 row=4, col=1
             )
         
-        fig.update_layout(height=800, showlegend=False)
+        fig.update_layout(height=800, showlegend=False, title_text=f"Genomic Analysis: {st.session_state.get('species', 'Unknown')} - {st.session_state.get('selected_assembly', 'Unknown')} - Chr {st.session_state.get('chromosome', 'Unknown')}")
         fig.update_xaxes(title_text="Genomic Position (bp)", row=4, col=1)
         
         st.plotly_chart(fig, use_container_width=True)
         
         # Conserved regions table
-        st.subheader("Top Conserved Regions")
+        st.subheader("🎯 Top Conserved Regions")
         if not conserved_regions.empty:
             display_conserved = conserved_regions.head(20)[
                 ['start', 'end', 'gc_content', 'entropy', 'repeat_content', 'conservation_score']
@@ -460,16 +615,16 @@ def main():
             # Download option
             csv = conserved_regions.to_csv(index=False)
             st.download_button(
-                label="Download Conserved Regions (CSV)",
+                label="📥 Download Conserved Regions (CSV)",
                 data=csv,
-                file_name=f"conserved_regions_{species.replace(' ', '_')}.csv",
+                file_name=f"conserved_regions_{st.session_state.get('species', 'unknown').replace(' ', '_')}_{st.session_state.get('selected_assembly', 'unknown')}.csv",
                 mime="text/csv"
             )
         else:
-            st.info("No conserved regions identified with current criteria")
+            st.info("ℹ️ No conserved regions identified with current criteria. Try adjusting the analysis parameters.")
         
         # Distribution plots
-        st.subheader("Statistical Distributions")
+        st.subheader("📊 Statistical Distributions")
         
         col1, col2 = st.columns(2)
         
@@ -494,76 +649,62 @@ def main():
             )
             st.plotly_chart(fig_scatter, use_container_width=True)
 
-    # Information panel
-    with st.expander("ℹ️ About Genome-Scaled Conservation Analysis"):
+    # Troubleshooting section
+    with st.expander("🔧 Troubleshooting"):
         st.markdown("""
-        **Adaptive Genome Analysis:**
+        **Common Issues and Solutions:**
         
-        This tool automatically scales analysis parameters based on the genome size of your organism,
-        ensuring optimal performance and meaningful results across different organism types.
+        1. **No assemblies found:**
+           - Check species name spelling (use scientific names like "Homo sapiens")
+           - Try removing quotes or special characters
+           - Some species may have limited public genome data
         
-        **Automatic Scaling Categories:**
+        2. **Sequence fetch fails:**
+           - Try different chromosome numbers (1, 2, X, Y, MT)
+           - Some assemblies may not have individual chromosomes available
+           - Try "1", "I", "chr1", or just leave blank for automatic selection
         
-        🦠 **Small Genomes (< 10 Mb)** - Viruses, minimal bacteria
-        - Analysis Length: Up to 500 kb (often full genome)
-        - Window Size: 500 bp (fine-grained analysis)
-        - Recommended Genomes: 8 (high replication for statistical power)
-        - Strategy: Deep analysis of most/all genomic content
+        3. **NCBI connection issues:**
+           - Ensure valid email address is provided
+           - Check internet connection
+           - NCBI may be temporarily unavailable
+           - Rate limits may apply - wait a few minutes and retry
         
-        🧫 **Medium Genomes (10-50 Mb)** - Bacteria, archaea
-        - Analysis Length: 1 Mb (representative sample)
-        - Window Size: 1000 bp (balanced resolution)
-        - Recommended Genomes: 6 (good statistical power)
-        - Strategy: Moderate-depth analysis of key regions
+        4. **Analysis errors:**
+           - Sequence may be too short for chosen window size
+           - Reduce window size for smaller sequences
+           - Some sequences may contain unusual characters
         
-        🍄 **Large Genomes (50-500 Mb)** - Fungi, simple eukaryotes
-        - Analysis Length: 2 Mb (focused sampling)
-        - Window Size: 2000 bp (broader patterns)
-        - Recommended Genomes: 4 (computational efficiency)
-        - Strategy: Targeted analysis of conserved regions
+        **Performance Tips:**
+        - Start with smaller organisms (bacteria) for faster results
+        - Use larger window sizes for initial exploration
+        - Large genomes may take several minutes to process
+        """)
+
+    # Information panel
+    with st.expander("ℹ️ About This Tool"):
+        st.markdown("""
+        **What This Tool Does:**
         
-        🌿 **Very Large Genomes (> 500 Mb)** - Plants, animals
-        - Analysis Length: 5 Mb (selective sampling)
-        - Window Size: 3000 bp (macro patterns)
-        - Recommended Genomes: 3 (manageable computation)
-        - Strategy: Broad survey of major conserved elements
+        This application connects directly to NCBI's databases to retrieve and analyze genome sequences.
+        It identifies potentially conserved regions based on sequence composition and complexity.
         
-        **Why Scaling Matters:**
+        **Conservation Metrics:**
+        - **GC Content**: Percentage of G and C nucleotides (optimal: 40-60%)
+        - **Sequence Complexity**: Shannon entropy measure (higher = more complex)
+        - **Repeat Content**: Percentage of simple repetitive sequences (lower = better)
+        - **Conservation Score**: Combined metric weighing all factors
         
-        - **Computational Feasibility**: Larger genomes need broader analysis windows
-        - **Statistical Power**: Smaller genomes can afford more detailed analysis
-        - **Biological Relevance**: Window sizes match typical functional element sizes
-        - **Resource Optimization**: Analysis time scales appropriately with genome complexity
+        **Data Sources:**
+        - NCBI Assembly database for genome assemblies
+        - NCBI Nucleotide database for sequence data
+        - RefSeq reference sequences when available
         
-        **Key Scaling Metrics:**
-        
-        - **Window Size**: Automatically adjusted based on genome size and typical functional elements
-        - **Analysis Depth**: More comprehensive for smaller, simpler genomes
-        - **Sample Size**: More genomes for smaller organisms (better statistics)
-        - **Sequence Length**: Scaled to capture representative genomic content
-        
-        **Conservation Ranking:**
-        
-        Regardless of genome size, results are ranked by **"Present in X% of sequenced genomes"**:
-        - 100% prevalence: Essential/core genomic elements
-        - 90-99% prevalence: Highly conserved regions
-        - 75-89% prevalence: Moderately conserved regions
-        - 50-74% prevalence: Variable but significant regions
-        
-        **Organism-Specific Optimization:**
-        
-        The tool adapts to biological reality:
-        - Viral genomes: Nearly complete analysis possible
-        - Bacterial genomes: Representative chromosomal sampling
-        - Eukaryotic genomes: Focus on gene-rich, conserved regions
-        - Plant/animal genomes: Broad survey of functional elements
-        
-        **Performance Benefits:**
-        
-        - **Faster Results**: Appropriately sized analysis for each organism type
-        - **Better Accuracy**: Window sizes match biological feature scales
-        - **Resource Efficient**: Computational load scales with organism complexity
-        - **Biologically Meaningful**: Results relevant to organism's genomic organization
+        **Limitations:**
+        - Analysis limited to publicly available genomes
+        - Sequence fetch limited to 2MB for performance
+        - Conservation prediction based on composition, not comparative analysis
+        - Real conservation requires multiple species comparison
         """)
 
 if __name__ == "__main__":

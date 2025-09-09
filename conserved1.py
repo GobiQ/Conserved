@@ -6,7 +6,18 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from Bio import Entrez, SeqIO
 from Bio.Seq import Seq
-from Bio.SeqUtils import GC
+try:
+    from Bio.SeqUtils import GC
+except ImportError:
+    # For newer versions of Biopython
+    from Bio.SeqUtils.ProtParam import ProteinAnalysis
+    def GC(seq):
+        seq = seq.upper()
+        gc_count = seq.count('G') + seq.count('C')
+        total_count = len(seq)
+        if total_count == 0:
+            return 0.0
+        return (gc_count / total_count) * 100
 import requests
 import io
 import time

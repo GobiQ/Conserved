@@ -727,7 +727,7 @@ def create_conservation_map(sequences: Dict[str, str], results_df: pd.DataFrame)
         fig.add_trace(trace)
     
     fig.update_layout(
-        title="Genome Conservation Map - Color-Coded by Conservation Level",
+        title="Genome Conservation Map - Color-Coded by Conservation Level (Hover for details)",
         xaxis_title="Genomic Position (bp)",
         yaxis_title="Conservation Level",
         height=400,
@@ -1041,7 +1041,7 @@ def create_sequence_browser(sequences: Dict[str, str], results_df: pd.DataFrame)
             min_value=1, 
             max_value=max_position-50, 
             value=1,
-            help="Select starting position for sequence view"
+            help="Select the starting position (1-based) for the sequence view. This determines where the sequence browser begins displaying sequences."
         )
     
     with col2:
@@ -1049,13 +1049,14 @@ def create_sequence_browser(sequences: Dict[str, str], results_df: pd.DataFrame)
             "View window size:",
             [50, 100, 200, 500],
             index=0,
-            help="Number of bases to show"
+            help="Number of bases to display in the sequence browser. Larger windows show more context but may be harder to read. Smaller windows focus on specific regions."
         )
     
     end_pos = min(start_pos + window_length - 1, max_position)
     
     # Extract sequences for the selected region
     st.write(f"**Showing positions {start_pos}-{end_pos}:**")
+    st.info("💡 **Sequence Browser Help**: Use the controls above to navigate through sequences. Green circles (🟢) indicate high conservation, yellow (🟡) moderate conservation, and red (🔴) low conservation. The position ruler helps you locate specific bases.")
     
     # Create alignment display
     alignment_data = []
@@ -1150,6 +1151,30 @@ def main():
     st.title("Genome Conservation Analysis Tool")
     st.markdown("Identifies conserved regions by comparing multiple genome sequences from NCBI.")
     
+    # Add helpful information about the tool
+    with st.expander("ℹ️ How this tool works", expanded=False):
+        st.markdown("""
+        **This tool helps you find conserved regions in genomic sequences by:**
+        
+        1. **Searching NCBI**: Finds multiple genome sequences for your species of interest
+        2. **Comparative Analysis**: Compares sequences using sliding window analysis
+        3. **Conservation Scoring**: Calculates conservation scores for each region
+        4. **Results Display**: Shows the most conserved regions with detailed information
+        
+        **Key Features:**
+        - Works with any organism type (viral, bacterial, eukaryotic, viroid)
+        - Auto-optimizes parameters based on sequence length and organism type
+        - Shows consensus sequences and individual sequence alignments
+        - Provides downloadable results for further analysis
+        - Includes test mode for learning and troubleshooting
+        
+        **Tips for best results:**
+        - Use the scientific name of your organism
+        - Select the correct organism type for optimized parameters
+        - Try different window sizes if conservation is low
+        - Include more sequences for better statistical power
+        """)
+    
     # Sidebar configuration
     with st.sidebar:
         st.header("Configuration")
@@ -1158,7 +1183,7 @@ def main():
         email = st.text_input(
             "Email (required for NCBI):",
             placeholder="your.email@example.com",
-            help="NCBI requires an email address for API access"
+            help="NCBI requires an email address for API access. This is used to identify your requests and is required by NCBI's usage policies. Your email is not stored or shared."
         )
         
         if not email or '@' not in email:
@@ -1170,14 +1195,15 @@ def main():
         example_species = st.selectbox(
             "Choose example or enter custom:",
             ["Custom", "Homo sapiens", "Escherichia coli", "Saccharomyces cerevisiae", 
-             "Hop latent viroid", "Potato spindle tuber viroid", "Tobacco mosaic virus"]
+             "Hop latent viroid", "Potato spindle tuber viroid", "Tobacco mosaic virus"],
+            help="Select a pre-configured species or choose 'Custom' to enter your own. Pre-configured species have optimized search strategies for better results."
         )
         
         if example_species == "Custom":
             species = st.text_input(
                 "Species name:",
                 placeholder="Enter scientific name",
-                help="Enter the scientific name (e.g., 'Hop latent viroid')"
+                help="Enter the scientific name using standard nomenclature (e.g., 'Hop latent viroid', 'Escherichia coli', 'Homo sapiens'). Use the full scientific name for best results."
             )
         else:
             species = example_species
@@ -1189,7 +1215,7 @@ def main():
         # Test mode option
         st.subheader("Testing & Debugging")
         test_mode = st.checkbox("Use synthetic test data", 
-                               help="Generate test sequences with known conservation patterns")
+                               help="Generate synthetic test sequences with known conservation patterns. Useful for testing the tool and understanding how conservation analysis works. No NCBI access required.")
         
         if test_mode:
             st.info("Test mode: Will generate synthetic sequences with predefined conservation patterns")
@@ -1198,7 +1224,7 @@ def main():
         organism_type = st.selectbox(
             "Organism type:",
             ["Viroid", "Virus", "Bacteria", "Fungi", "Plant", "Animal"],
-            help="Select organism type for optimized analysis parameters"
+            help="Select the type of organism you're analyzing. This affects search strategies, sequence length expectations, and analysis parameters. Viroids are very small (200-400 bp), viruses are small to medium (1-500 kb), while bacteria and eukaryotes are much larger."
         )
         
         # Auto-adjust parameters based on organism type AND sequence data
@@ -1264,12 +1290,17 @@ def main():
         
         # Advanced parameters
         with st.expander("Advanced: Custom Parameters"):
-            custom_params = st.checkbox("Override auto-optimized parameters", value=False)
+            custom_params = st.checkbox("Override auto-optimized parameters", 
+                                      value=False,
+                                      help="Check this to manually adjust analysis parameters instead of using the auto-optimized settings")
             
             if custom_params:
-                window_size = st.slider("Window size (bp):", 5, 2000, default_window)
-                step_size = st.slider("Step size (bp):", 1, 500, default_step)
-                max_sequences = st.slider("Max sequences:", 2, 50, default_max_sequences)
+                window_size = st.slider("Window size (bp):", 5, 2000, default_window,
+                                      help="Size of the sliding window for conservation analysis. Smaller windows detect shorter conserved regions but may be noisy. Larger windows smooth out noise but may miss short conserved elements.")
+                step_size = st.slider("Step size (bp):", 1, 500, default_step,
+                                    help="How many base pairs to move the window for each analysis step. Smaller steps give higher resolution but take longer. Larger steps are faster but may miss conserved regions between steps.")
+                max_sequences = st.slider("Max sequences:", 2, 50, default_max_sequences,
+                                        help="Maximum number of sequences to analyze. More sequences give better conservation statistics but take longer to process. NCBI has rate limits, so very high numbers may cause delays.")
             else:
                 window_size = default_window
                 step_size = default_step
@@ -1280,7 +1311,8 @@ def main():
     
     with col1:
         if test_mode:
-            if st.button("Generate Test Sequences", type="primary"):
+            if st.button("Generate Test Sequences", type="primary", 
+                        help="Generate synthetic test sequences with known conservation patterns. This is useful for testing the tool and understanding how conservation analysis works."):
                 analyzer = NCBIGenomeAnalyzer(email, organism_type)
                 
                 with st.spinner("Generating test sequences..."):
@@ -1304,7 +1336,8 @@ def main():
                     
                 st.success("Test sequences generated! You can now run analysis to verify the tool works.")
         else:
-            if st.button("Search Genome Sequences", type="primary"):
+            if st.button("Search Genome Sequences", type="primary",
+                        help="Search NCBI's nucleotide database for genome sequences of the specified species. This will find and retrieve sequences for comparative analysis."):
                 analyzer = NCBIGenomeAnalyzer(email, organism_type)
                 
                 with st.spinner(f"Searching for {species} sequences..."):
@@ -1319,7 +1352,8 @@ def main():
                     st.error(f"No sequences found for {species}")
     
     with col2:
-        if st.button("Test NCBI Connection"):
+        if st.button("Test NCBI Connection",
+                    help="Test your connection to NCBI's database to ensure you can retrieve sequences. This helps diagnose connection issues before running the full analysis."):
             if test_ncbi_connection(email):
                 st.success("NCBI connection successful!")
             else:
@@ -1355,7 +1389,8 @@ def main():
         st.write(f"**Available sequences:** {num_available}")
         st.write(f"**Will analyze:** {num_to_analyze} (limited by max_sequences parameter)")
         
-        if st.button("Analyze ALL Sequences for Conservation", type="primary"):
+        if st.button("Analyze ALL Sequences for Conservation", type="primary",
+                    help="Perform comparative conservation analysis on all available sequences. This will download sequences from NCBI (if not using test data) and identify the most conserved regions across all sequences."):
             analyzer = NCBIGenomeAnalyzer(email, current_organism_type)
             sequence_ids = [seq['sequence_id'] for seq in st.session_state['sequences']]
             
@@ -1460,13 +1495,14 @@ def main():
             st.metric("Average Identity", f"{avg_identity:.1f}%")
         
         # Conservation visualization
+        st.write("**Conservation Analysis Charts** - Hover over points for detailed information")
         fig = make_subplots(
             rows=3, cols=1,
             shared_xaxes=True,
             subplot_titles=(
-                'Conservation Score (fraction conserved)', 
-                'Identity Percentage (all identical)', 
-                'GC Content of Consensus'
+                'Conservation Score (fraction conserved) - Higher values indicate more conserved regions', 
+                'Identity Percentage (all identical) - Percentage of positions where sequences are identical', 
+                'GC Content of Consensus - GC content of the consensus sequence at each position'
             ),
             vertical_spacing=0.08
         )
@@ -1577,7 +1613,8 @@ def main():
                 label="Download Most Conserved Regions (CSV)",
                 data=csv,
                 file_name=f"most_conserved_regions_{st.session_state.get('species', 'unknown').replace(' ', '_')}.csv",
-                mime="text/csv"
+                mime="text/csv",
+                help="Download the most conserved regions as a CSV file. This includes position coordinates, conservation scores, consensus sequences, and other metrics for further analysis in Excel or other tools."
             )
             
         else:

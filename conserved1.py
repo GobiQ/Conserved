@@ -646,6 +646,93 @@ class NCBIGenomeAnalyzer:
         
         return entropy
 
+    def compare_custom_sequence(self, custom_sequence: str, loaded_sequences: Dict[str, str], 
+                              min_match_length: int = 20, max_mismatches: int = 2) -> pd.DataFrame:
+        """Compare a custom sequence against all loaded genome sequences"""
+        if not custom_sequence or len(custom_sequence) < min_match_length:
+            return pd.DataFrame()
+        
+        custom_sequence = custom_sequence.upper().replace(' ', '').replace('\n', '')
+        
+        results = []
+        
+        for seq_id, genome_sequence in loaded_sequences.items():
+            # Find all matches of the custom sequence in the genome
+            matches = self._find_sequence_matches(custom_sequence, genome_sequence, 
+                                                min_match_length, max_mismatches)
+            
+            for match in matches:
+                results.append({
+                    'sequence_id': seq_id,
+                    'match_start': match['start'],
+                    'match_end': match['end'],
+                    'match_length': match['length'],
+                    'mismatches': match['mismatches'],
+                    'identity_percentage': match['identity'],
+                    'match_sequence': match['matched_seq'],
+                    'genome_region': genome_sequence[match['start']:match['end']],
+                    'context_start': max(0, match['start'] - 50),
+                    'context_end': min(len(genome_sequence), match['end'] + 50),
+                    'context_sequence': genome_sequence[max(0, match['start'] - 50):min(len(genome_sequence), match['end'] + 50)]
+                })
+        
+        return pd.DataFrame(results)
+    
+    def _find_sequence_matches(self, query_seq: str, target_seq: str, 
+                             min_length: int, max_mismatches: int) -> List[Dict]:
+        """Find approximate matches of query sequence in target sequence"""
+        matches = []
+        query_len = len(query_seq)
+        
+        # Use sliding window approach for approximate matching
+        for i in range(len(target_seq) - min_length + 1):
+            for window_len in range(min_length, min(query_len + 1, len(target_seq) - i + 1)):
+                target_window = target_seq[i:i + window_len]
+                
+                # Calculate mismatches for this window
+                mismatches = self._calculate_mismatches(query_seq[:window_len], target_window)
+                
+                if mismatches <= max_mismatches:
+                    identity = ((window_len - mismatches) / window_len) * 100
+                    
+                    matches.append({
+                        'start': i + 1,  # 1-based
+                        'end': i + window_len,
+                        'length': window_len,
+                        'mismatches': mismatches,
+                        'identity': identity,
+                        'matched_seq': target_window
+                    })
+        
+        # Sort by identity percentage (highest first), then by length
+        matches.sort(key=lambda x: (-x['identity'], -x['length']))
+        
+        # Remove overlapping matches (keep the best one)
+        filtered_matches = []
+        for match in matches:
+            is_overlapping = False
+            for existing in filtered_matches:
+                if (match['start'] <= existing['end'] and match['end'] >= existing['start']):
+                    is_overlapping = True
+                    break
+            
+            if not is_overlapping:
+                filtered_matches.append(match)
+        
+        return filtered_matches[:10]  # Limit to top 10 matches per sequence
+    
+    def _calculate_mismatches(self, seq1: str, seq2: str) -> int:
+        """Calculate number of mismatches between two sequences"""
+        if len(seq1) != len(seq2):
+            return max(len(seq1), len(seq2))
+        
+        mismatches = 0
+        for i in range(len(seq1)):
+            if seq1[i] != seq2[i]:
+                mismatches += 1
+        
+        return mismatches
+
 def create_conservation_map(sequences: Dict[str, str], results_df: pd.DataFrame) -> go.Figure:
     """Create a clear graphical conservation map with color-coded regions"""
     
@@ -1025,6 +1112,114 @@ def create_conservation_track(results_df: pd.DataFrame, sequences: Dict[str, str
     fig.update_yaxes(title_text="Base Diversity", row=2, col=1)
     
     return fig
+
+def create_sequence_match_visualization(matches_df: pd.DataFrame, custom_sequence: str) -> go.Figure:
+    """Create visualization showing where custom sequence matches occur in genomes"""
+    if matches_df.empty:
+        return go.Figure()
+    
+    fig = go.Figure()
+    
+    # Color code by identity percentage
+    colors = []
+    for identity in matches_df['identity_percentage']:
+        if identity >= 95:
+            colors.append('darkgreen')
+        elif identity >= 90:
+            colors.append('green')
+        elif identity >= 80:
+            colors.append('yellow')
+        elif identity >= 70:
+            colors.append('orange')
+        else:
+            colors.append('red')
+    
+    # Create scatter plot
+    fig.add_trace(go.Scatter(
+        x=matches_df['match_start'],
+        y=matches_df['sequence_id'],
+        mode='markers',
+        marker=dict(
+            size=matches_df['match_length'] * 2,  # Size based on match length
+            color=colors,
+            line=dict(width=1, color='black'),
+            opacity=0.7
+        ),
+        text=[f"Pos: {row['match_start']}-{row['match_end']}<br>"
+              f"Length: {row['match_length']} bp<br>"
+              f"Identity: {row['identity_percentage']:.1f}%<br>"
+              f"Mismatches: {row['mismatches']}" 
+              for _, row in matches_df.iterrows()],
+        hovertemplate='%{text}<extra></extra>',
+        name='Sequence Matches'
+    ))
+    
+    fig.update_layout(
+        title=f"Custom Sequence Matches in Loaded Genomes<br><sub>Query: {custom_sequence[:50]}{'...' if len(custom_sequence) > 50 else ''}</sub>",
+        xaxis_title="Genomic Position (bp)",
+        yaxis_title="Genome Sequences",
+        height=max(400, len(matches_df['sequence_id'].unique()) * 50),
+        showlegend=False
+    )
+    
+    return fig
+
+def create_sequence_alignment_display(matches_df: pd.DataFrame, custom_sequence: str) -> None:
+    """Display detailed sequence alignments for matches"""
+    if matches_df.empty:
+        st.warning("No matches found for the custom sequence.")
+        return
+    
+    st.subheader("Detailed Sequence Alignments")
+    
+    # Group matches by sequence
+    for seq_id in matches_df['sequence_id'].unique():
+        seq_matches = matches_df[matches_df['sequence_id'] == seq_id].sort_values('identity_percentage', ascending=False)
+        
+        with st.expander(f"Matches in {seq_id} ({len(seq_matches)} matches)", expanded=len(seq_matches) <= 3):
+            for i, (_, match) in enumerate(seq_matches.iterrows()):
+                st.write(f"**Match {i+1}:** Position {match['match_start']}-{match['match_end']} "
+                        f"(Identity: {match['identity_percentage']:.1f}%, Length: {match['match_length']} bp)")
+                
+                # Show alignment
+                query_seq = custom_sequence[:match['match_length']]
+                target_seq = match['match_sequence']
+                
+                # Create alignment display
+                alignment_display = ""
+                for j, (q, t) in enumerate(zip(query_seq, target_seq)):
+                    if q == t:
+                        alignment_display += "|"
+                    else:
+                        alignment_display += " "
+                
+                col1, col2, col3 = st.columns([1, 1, 1])
+                with col1:
+                    st.write("**Query:**")
+                    st.code(query_seq)
+                with col2:
+                    st.write("**Alignment:**")
+                    st.code(alignment_display)
+                with col3:
+                    st.write("**Target:**")
+                    st.code(target_seq)
+                
+                # Show context
+                st.write("**Context (±50 bp):**")
+                context = match['context_sequence']
+                context_start = match['context_start']
+                context_end = match['context_end']
+                
+                # Highlight the match in context
+                match_rel_start = match['match_start'] - context_start - 1
+                match_rel_end = match['match_end'] - context_start
+                
+                highlighted_context = (context[:match_rel_start] + 
+                                    "[" + context[match_rel_start:match_rel_end] + "]" + 
+                                    context[match_rel_end:])
+                
+                st.code(f"Position {context_start+1}-{context_end}: {highlighted_context}")
+                st.write("---")
 
 def create_sequence_browser(sequences: Dict[str, str], results_df: pd.DataFrame):
     """Create an interactive sequence browser"""
@@ -1619,6 +1814,149 @@ def main():
             
         else:
             st.warning("No regions found for analysis. This might indicate an issue with the sequence data or analysis parameters.")
+    
+    # Custom Sequence Comparison Section
+    if 'compared_sequences' in st.session_state and st.session_state['compared_sequences']:
+        st.header("🔍 Custom Sequence Comparison")
+        st.write("Compare your own sequence against the loaded genome sequences to find matches and similarities.")
+        
+        # Custom sequence input
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            custom_sequence = st.text_area(
+                "Enter your sequence:",
+                placeholder="Enter DNA/RNA sequence (ATGC or AUGC)...",
+                height=100,
+                help="Enter the sequence you want to search for in the loaded genomes. Can be DNA (ATGC) or RNA (AUGC). Spaces and newlines will be automatically removed."
+            )
+        
+        with col2:
+            st.write("**Search Parameters:**")
+            min_match_length = st.number_input(
+                "Minimum match length:",
+                min_value=10,
+                max_value=1000,
+                value=20,
+                help="Minimum length of sequence matches to report"
+            )
+            max_mismatches = st.number_input(
+                "Maximum mismatches:",
+                min_value=0,
+                max_value=10,
+                value=2,
+                help="Maximum number of mismatches allowed in a match"
+            )
+        
+        if custom_sequence:
+            # Clean the sequence
+            clean_sequence = custom_sequence.upper().replace(' ', '').replace('\n', '').replace('\r', '')
+            
+            # Validate sequence
+            valid_bases = set('ATGCU')
+            if not all(base in valid_bases for base in clean_sequence):
+                st.error("❌ Invalid sequence. Please use only A, T, G, C (DNA) or A, U, G, C (RNA) bases.")
+            elif len(clean_sequence) < min_match_length:
+                st.warning(f"⚠️ Sequence too short. Minimum length is {min_match_length} bases.")
+            else:
+                st.success(f"✅ Valid sequence: {len(clean_sequence)} bases")
+                
+                if st.button("🔍 Search for Sequence Matches", type="primary",
+                           help="Search for your custom sequence in all loaded genome sequences"):
+                    
+                    with st.spinner("Searching for sequence matches..."):
+                        analyzer = NCBIGenomeAnalyzer(email, st.session_state.get('organism_type', 'Bacteria'))
+                        matches_df = analyzer.compare_custom_sequence(
+                            clean_sequence, 
+                            st.session_state['compared_sequences'],
+                            min_match_length, 
+                            max_mismatches
+                        )
+                        
+                        if not matches_df.empty:
+                            st.session_state['custom_sequence_matches'] = matches_df
+                            st.session_state['custom_sequence'] = clean_sequence
+                            st.success(f"Found {len(matches_df)} matches across {matches_df['sequence_id'].nunique()} sequences!")
+                        else:
+                            st.warning("No matches found. Try reducing the minimum match length or increasing the maximum mismatches allowed.")
+                            st.session_state['custom_sequence_matches'] = pd.DataFrame()
+                            st.session_state['custom_sequence'] = clean_sequence
+    
+    # Display custom sequence results
+    if 'custom_sequence_matches' in st.session_state and not st.session_state['custom_sequence_matches'].empty:
+        st.header("🎯 Custom Sequence Match Results")
+        
+        matches_df = st.session_state['custom_sequence_matches']
+        custom_seq = st.session_state['custom_sequence']
+        
+        # Summary statistics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Matches", len(matches_df))
+        with col2:
+            st.metric("Sequences with Matches", matches_df['sequence_id'].nunique())
+        with col3:
+            best_identity = matches_df['identity_percentage'].max()
+            st.metric("Best Match Identity", f"{best_identity:.1f}%")
+        with col4:
+            avg_identity = matches_df['identity_percentage'].mean()
+            st.metric("Average Identity", f"{avg_identity:.1f}%")
+        
+        # Match visualization
+        st.subheader("Match Locations")
+        fig = create_sequence_match_visualization(matches_df, custom_seq)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Detailed results table
+        st.subheader("Match Details")
+        
+        # Filter options
+        col1, col2 = st.columns(2)
+        with col1:
+            min_identity_filter = st.slider("Filter by minimum identity:", 0, 100, 0)
+        with col2:
+            selected_sequences = st.multiselect(
+                "Filter by sequence:",
+                options=matches_df['sequence_id'].unique(),
+                default=matches_df['sequence_id'].unique()
+            )
+        
+        # Apply filters
+        filtered_matches = matches_df[
+            (matches_df['identity_percentage'] >= min_identity_filter) &
+            (matches_df['sequence_id'].isin(selected_sequences))
+        ]
+        
+        if not filtered_matches.empty:
+            # Display summary table
+            display_cols = ['sequence_id', 'match_start', 'match_end', 'match_length', 
+                           'identity_percentage', 'mismatches']
+            st.dataframe(
+                filtered_matches[display_cols].rename(columns={
+                    'sequence_id': 'Sequence ID',
+                    'match_start': 'Start Position',
+                    'match_end': 'End Position', 
+                    'match_length': 'Length (bp)',
+                    'identity_percentage': 'Identity (%)',
+                    'mismatches': 'Mismatches'
+                }),
+                use_container_width=True
+            )
+            
+            # Detailed alignments
+            create_sequence_alignment_display(filtered_matches, custom_seq)
+            
+            # Download option
+            csv = filtered_matches.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Match Results (CSV)",
+                data=csv,
+                file_name=f"sequence_matches_{st.session_state.get('species', 'unknown').replace(' ', '_')}.csv",
+                mime="text/csv",
+                help="Download all sequence match results as a CSV file for further analysis"
+            )
+        else:
+            st.info("No matches meet the current filter criteria. Try adjusting the filters.")
 
 if __name__ == "__main__":
     main()

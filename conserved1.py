@@ -1,4 +1,170 @@
-import streamlit as st
+# Display results
+    if 'conserved_regions' in st.session_state and not st.session_state['conserved_regions'].empty:
+        st.header("🧬 Cross-Genome Conservation Results")
+        
+        conserved_regions = st.session_state['conserved_regions']
+        analyzed_genomes = st.session_state.get('analyzed_genomes', 0)
+        total_length = st.session_state.get('total_sequences_length', 0)
+        
+        # Summary statistics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Genomes Analyzed", analyzed_genomes)
+        with col2:
+            st.metric("Total Sequence Length", f"{total_length:,} bp")
+        with col3:
+            st.metric("Conserved Regions Found", len(conserved_regions))
+        with col4:
+            avg_prevalence = conserved_regions['prevalence_percentage'].mean()
+            st.metric("Avg. Prevalence", f"{avg_prevalence:.1f}%")
+        
+        # Top conserved regions ranked by prevalence
+        st.subheader("🏆 Top Conserved Regions (Ranked by Genome Prevalence)")
+        
+        # Display top 50 regions
+        display_cols = [
+            'start', 'end', 'prevalence_percentage', 'genomes_with_region', 'total_genomes',
+            'avg_similarity', 'conservation_score', 'avg_gc_content', 'consensus_sequence'
+        ]
+        
+        top_regions = conserved_regions.head(50)[display_cols].copy()
+        top_regions = top_regions.round(3)
+        
+        # Format for better display
+        top_regions['Region'] = top_regions['start'].astype(str) + '-' + top_regions['end'].astype(str)
+        top_regions['Prevalence'] = top_regions['prevalence_percentage'].astype(str) + '%'
+        top_regions['Present in'] = (top_regions['genomes_with_region'].astype(str) + '/' + 
+                                   top_regions['total_genomes'].astype(str) + ' genomes')
+        
+        display_df = top_regions[['Region', 'Prevalence', 'Present in', 'avg_similarity', 
+                                'conservation_score', 'avg_gc_content', 'consensus_sequence']].copy()
+        display_df.columns = ['Genomic Region', 'Prevalence %', 'Present in Genomes', 
+                            'Avg Similarity', 'Conservation Score', 'GC Content %', 'Consensus Sequence']
+        
+        st.dataframe(display_df, use_container_width=True, height=600)
+        
+        # Prevalence distribution
+        st.subheader("📊 Conservation Analysis")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Prevalence histogram
+            fig_prev = px.histogram(
+                conserved_regions, 
+                x='prevalence_percentage',
+                nbins=20,
+                title='Distribution of Region Prevalence Across Genomes',
+                labels={'prevalence_percentage': 'Prevalence (%)', 'count': 'Number of Regions'},
+                color_discrete_sequence=['#636EFA']
+            )
+            fig_prev.update_layout(showlegend=False)
+            st.plotly_chart(fig_prev, use_container_width=True)
+        
+        with col2:
+            # Conservation score vs prevalence
+            fig_scatter = px.scatter(
+                conserved_regions.head(200),  # Limit for performance
+                x='prevalence_percentage',
+                y='conservation_score',
+                color='avg_similarity',
+                size='genomes_with_region',
+                title='Conservation Score vs Prevalence',
+                labels={
+                    'prevalence_percentage': 'Prevalence (%)',
+                    'conservation_score': 'Conservation Score',
+                    'avg_similarity': 'Avg Similarity',
+                    'genomes_with_region': 'Genomes with Region'
+                },
+                hover_data=['start', 'end']
+            )
+            st.plotly_chart(fig_scatter, use_container_width=True)
+        
+        # Genomic landscape plot
+        st.subheader("🗺️ Genomic Conservation Landscape")
+        
+        # Create genomic position plot
+        fig_landscape = go.Figure()
+        
+        # Add prevalence trace
+        fig_landscape.add_trace(
+            go.Scatter(
+                x=conserved_regions['start'],
+                y=conserved_regions['prevalence_percentage'],
+                mode='markers',
+                marker=dict(
+                    size=conserved_regions['conservation_score'] * 10,
+                    color=conserved_regions['avg_similarity'],
+                    colorscale='Viridis',
+                    showscale=True,
+                    colorbar=dict(title="Avg Similarity")
+                ),
+                text=[f"Region: {row['start']}-{row['end']}<br>"
+                      f"Prevalence: {row['prevalence_percentage']:.1f}%<br>"
+                      f"Present in: {row['genomes_with_region']}/{row['total_genomes']} genomes<br>"
+                      f"Conservation Score: {row['conservation_score']:.3f}"
+                      for _, row in conserved_regions.iterrows()],
+                hovertemplate='%{text}<extra></extra>',
+                name='Conserved Regions'
+            )
+        )
+        
+        fig_landscape.update_layout(
+            title='Conserved Regions Across Genomic Positions',
+            xaxis_title='Genomic Position (bp)',
+            yaxis_title='Prevalence Across Genomes (%)',
+            height=500
+        )
+        
+        st.plotly_chart(fig_landscape, use_container_width=True)
+        
+        # Summary statistics table
+        st.subheader("📈 Summary Statistics")
+        
+        summary_stats = {
+            'Metric': [
+                'Total Conserved Regions',
+                'Regions in 100% of Genomes',
+                'Regions in ≥90% of Genomes', 
+                'Regions in ≥75% of Genomes',
+                'Average Prevalence',
+                'Average Conservation Score',
+                'Average Sequence Similarity'
+            ],
+            'Value': [
+                len(conserved_regions),
+                len(conserved_regions[conserved_regions['prevalence_percentage'] == 100]),
+                len(conserved_regions[conserved_regions['prevalence_percentage'] >= 90]),
+                len(conserved_regions[conserved_regions['prevalence_percentage'] >= 75]),
+                f"{conserved_regions['prevalence_percentage'].mean():.1f}%",
+                f"{conserved_regions['conservation_score'].mean():.3f}",
+                f"{conserved_regions['avg_similarity'].mean():.3f}"
+            ]
+        }
+        
+        summary_df = pd.DataFrame(summary_stats)
+        st.table(summary_df)
+        
+        # Download options
+        st.subheader("💾 Download Results")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Full results CSV
+            csv_full = conserved_regions.to_csv(index=False)
+            st.download_button(
+                label="📄 Download Full Results (CSV)",
+                data=csv_full,
+                file_name=f"conserved_regions_full_{species.replace(' ', '_')}.csv",
+                mime="text/csv"
+            )
+        
+        with col2:
+            # High confidence regions only (≥90% prevalence)
+            high_conf = conserved_regions[conserved_regions['prevalence_percentage'] >= 90]
+            if not high_conf.empty:
+                csv_high_conf = high_conf.to_csvimport streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -326,13 +492,12 @@ def main():
                     
                     if test_results.get('IdList'):
                         st.success("✅ NCBI connection successful!")
-                        if debug_mode:
+                        if 'debug_mode' in locals() and debug_mode:
                             st.json(test_results)
                     else:
                         st.warning("⚠️ NCBI connection working but no results found")
                 except Exception as e:
                     st.error(f"❌ NCBI connection failed: {str(e)}")
-    
             st.metric("Windows Analyzed", len(df_results))
         with col3:
             st.metric("Conserved Regions", len(conserved_regions))
@@ -432,24 +597,75 @@ def main():
             st.plotly_chart(fig_scatter, use_container_width=True)
 
     # Information panel
-    with st.expander("ℹ️ About Conservation Analysis"):
+    with st.expander("ℹ️ About Genome-Scaled Conservation Analysis"):
         st.markdown("""
-        **Conservation Criteria Used:**
+        **Adaptive Genome Analysis:**
         
-        - **GC Content**: Moderate GC content (40-60%) often indicates functional regions
-        - **Sequence Complexity**: High entropy suggests non-repetitive, potentially functional sequences
-        - **Repeat Content**: Low repetitive content indicates unique, possibly conserved sequences
+        This tool automatically scales analysis parameters based on the genome size of your organism,
+        ensuring optimal performance and meaningful results across different organism types.
         
-        **Conservation Score**: Weighted combination of:
-        - GC content balance (30%)
-        - Sequence complexity (40%) 
-        - Low repeat content (30%)
+        **Automatic Scaling Categories:**
         
-        **Limitations:**
-        - Analysis is limited to 1MB sequences for performance
-        - Simple repeat detection algorithm
-        - Conservation inference based on sequence properties only
-        - Does not include cross-species comparison
+        🦠 **Small Genomes (< 10 Mb)** - Viruses, minimal bacteria
+        - Analysis Length: Up to 500 kb (often full genome)
+        - Window Size: 500 bp (fine-grained analysis)
+        - Recommended Genomes: 8 (high replication for statistical power)
+        - Strategy: Deep analysis of most/all genomic content
+        
+        🧫 **Medium Genomes (10-50 Mb)** - Bacteria, archaea
+        - Analysis Length: 1 Mb (representative sample)
+        - Window Size: 1000 bp (balanced resolution)
+        - Recommended Genomes: 6 (good statistical power)
+        - Strategy: Moderate-depth analysis of key regions
+        
+        🍄 **Large Genomes (50-500 Mb)** - Fungi, simple eukaryotes
+        - Analysis Length: 2 Mb (focused sampling)
+        - Window Size: 2000 bp (broader patterns)
+        - Recommended Genomes: 4 (computational efficiency)
+        - Strategy: Targeted analysis of conserved regions
+        
+        🌿 **Very Large Genomes (> 500 Mb)** - Plants, animals
+        - Analysis Length: 5 Mb (selective sampling)
+        - Window Size: 3000 bp (macro patterns)
+        - Recommended Genomes: 3 (manageable computation)
+        - Strategy: Broad survey of major conserved elements
+        
+        **Why Scaling Matters:**
+        
+        - **Computational Feasibility**: Larger genomes need broader analysis windows
+        - **Statistical Power**: Smaller genomes can afford more detailed analysis
+        - **Biological Relevance**: Window sizes match typical functional element sizes
+        - **Resource Optimization**: Analysis time scales appropriately with genome complexity
+        
+        **Key Scaling Metrics:**
+        
+        - **Window Size**: Automatically adjusted based on genome size and typical functional elements
+        - **Analysis Depth**: More comprehensive for smaller, simpler genomes
+        - **Sample Size**: More genomes for smaller organisms (better statistics)
+        - **Sequence Length**: Scaled to capture representative genomic content
+        
+        **Conservation Ranking:**
+        
+        Regardless of genome size, results are ranked by **"Present in X% of sequenced genomes"**:
+        - 100% prevalence: Essential/core genomic elements
+        - 90-99% prevalence: Highly conserved regions
+        - 75-89% prevalence: Moderately conserved regions
+        - 50-74% prevalence: Variable but significant regions
+        
+        **Organism-Specific Optimization:**
+        
+        The tool adapts to biological reality:
+        - Viral genomes: Nearly complete analysis possible
+        - Bacterial genomes: Representative chromosomal sampling
+        - Eukaryotic genomes: Focus on gene-rich, conserved regions
+        - Plant/animal genomes: Broad survey of functional elements
+        
+        **Performance Benefits:**
+        
+        - **Faster Results**: Appropriately sized analysis for each organism type
+        - **Better Accuracy**: Window sizes match biological feature scales
+        - **Resource Efficient**: Computational load scales with organism complexity
+        - **Biologically Meaningful**: Results relevant to organism's genomic organization
         """)
 
 if __name__ == "__main__":

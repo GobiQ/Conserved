@@ -354,8 +354,87 @@ class NCBIGenomeAnalyzer:
         st.success(f"Successfully fetched {len(sequences)}/{len(sequence_ids)} sequences")
         return sequences
     
+    def generate_test_sequences(self, species: str, num_sequences: int = 5) -> Dict[str, str]:
+        """Generate synthetic test sequences with known conservation patterns"""
+        st.info("Generating synthetic test sequences with known conservation patterns")
+        
+        if self.organism_type == "Viroid":
+            base_length = 300
+            # Create a conserved core with variable regions
+            conserved_regions = [
+                "GGAACCTTGTCGGATCCGAGGATCCGTCGAAC",  # Highly conserved
+                "CTCGAGCTTGGACTCGAGCT",               # Moderately conserved
+                "GGCCTTAACCGGTT"                     # Highly conserved
+            ]
+        else:
+            base_length = 1000
+            conserved_regions = [
+                "ATGCGATCGGATCCGAGGATCCGTCGAACCTGG",
+                "TTCGAGCTTGGACTCGAGCTATGCC",
+                "GGCCTTAACCGGTTAAGCTT",
+                "CGATCGATCGTAGCTAGCTA"
+            ]
+        
+        sequences = {}
+        
+        for i in range(num_sequences):
+            sequence = ""
+            pos = 0
+            
+            for j, conserved_seq in enumerate(conserved_regions):
+                # Add variable region before conserved region
+                if j > 0:
+                    var_length = 50 if self.organism_type == "Viroid" else 200
+                    variable_region = self._generate_random_sequence(var_length, f"variable_{j}_{i}")
+                    sequence += variable_region
+                    pos += var_length
+                
+                # Add conserved region with some mutations
+                if i == 0:
+                    # Reference sequence - no mutations
+                    sequence += conserved_seq
+                else:
+                    # Introduce some mutations (10-20% depending on region)
+                    mutation_rate = 0.1 if j % 2 == 0 else 0.2  # Alternate high/low conservation
+                    mutated_seq = self._introduce_mutations(conserved_seq, mutation_rate, i)
+                    sequence += mutated_seq
+                
+                pos += len(conserved_seq)
+            
+            # Fill to target length
+            if len(sequence) < base_length:
+                remaining = base_length - len(sequence)
+                sequence += self._generate_random_sequence(remaining, f"tail_{i}")
+            
+            sequences[f"TEST_SEQ_{i+1:02d}"] = sequence[:base_length]
+        
+        st.success(f"Generated {len(sequences)} test sequences with known conservation patterns")
+        return sequences
+
+    def _generate_random_sequence(self, length: int, seed_str: str) -> str:
+        """Generate random DNA sequence with consistent seed"""
+        import random
+        random.seed(hash(seed_str) % (2**32))
+        bases = 'ATGC'
+        return ''.join(random.choice(bases) for _ in range(length))
+
+    def _introduce_mutations(self, sequence: str, mutation_rate: float, seq_index: int) -> str:
+        """Introduce random mutations at specified rate"""
+        import random
+        random.seed((hash(sequence) + seq_index) % (2**32))
+        bases = 'ATGC'
+        mutated = list(sequence)
+        
+        for i in range(len(mutated)):
+            if random.random() < mutation_rate:
+                current_base = mutated[i]
+                available_bases = [b for b in bases if b != current_base]
+                mutated[i] = random.choice(available_bases)
+        
+        return ''.join(mutated)
+    
     def true_comparative_analysis(self, sequences: Dict[str, str], window_size: int = 25, step_size: int = 5) -> pd.DataFrame:
-        """Perform TRUE comparative analysis - all sequences compared simultaneously"""
+        """Perform comparative analysis with improved alignment strategy"""
         if len(sequences) < 2:
             st.error("Need at least 2 sequences for comparative analysis")
             return pd.DataFrame()
@@ -365,40 +444,61 @@ class NCBIGenomeAnalyzer:
         seq_ids = list(sequences.keys())
         seq_list = list(sequences.values())
         
-        # Find optimal analysis length
+        # Better length handling - use overlapping regions only
         lengths = [len(seq) for seq in seq_list]
-        if self.organism_type == "Viroid":
-            target_length = max(set(lengths), key=lengths.count)  # Most common length
-        else:
-            target_length = min(lengths)
+        min_length = min(lengths)
+        max_length = max(lengths)
         
-        if target_length < window_size:
-            window_size = max(5, target_length // 5)
+        st.info(f"Sequence lengths: {min_length} - {max_length} bp")
+        
+        # Choose analysis strategy based on length variation
+        length_variation = (max_length - min_length) / min_length
+        
+        if length_variation > 0.1:  # >10% variation
+            # Use minimum length for fair comparison
+            analysis_length = min_length
+            st.info(f"High length variation detected. Using {analysis_length} bp for comparison")
+        else:
+            # Use common length
+            analysis_length = min_length
+        
+        # Ensure window size is appropriate
+        if window_size > analysis_length:
+            window_size = max(5, analysis_length // 10)
             step_size = max(1, window_size // 5)
             st.warning(f"Adjusted window size to {window_size}bp for short sequences")
         
-        # Align sequences
+        # Prepare sequences (trim to common length, no padding)
         aligned_sequences = []
         for seq_id, sequence in sequences.items():
-            if len(sequence) >= target_length:
-                aligned_seq = sequence[:target_length]
-            else:
-                aligned_seq = sequence.ljust(target_length, 'N')
-            aligned_sequences.append(aligned_seq)
-        
+            trimmed_seq = sequence[:analysis_length].upper()
+            aligned_sequences.append(trimmed_seq)
+            
         # Sliding window analysis
         results = []
-        total_windows = (target_length - window_size) // step_size + 1
+        total_windows = max(1, (analysis_length - window_size) // step_size + 1)
         progress_bar = st.progress(0)
         
-        for i, pos in enumerate(range(0, target_length - window_size + 1, step_size)):
+        for i, pos in enumerate(range(0, analysis_length - window_size + 1, step_size)):
             windows = [seq[pos:pos + window_size] for seq in aligned_sequences]
             
-            conservation_score = self._calculate_conservation_score(windows)
-            identity_percentage = self._calculate_identity_percentage(windows)
-            consensus_sequence = self._generate_consensus(windows)
+            # Skip windows with too many gaps or Ns
+            valid_windows = []
+            for window in windows:
+                n_count = window.count('N') + window.count('-')
+                if n_count / len(window) < 0.3:  # Less than 30% gaps/Ns
+                    valid_windows.append(window)
             
-            gc_content = GC(consensus_sequence) if consensus_sequence else 0
+            if len(valid_windows) < 2:
+                continue
+                
+            conservation_score = self._calculate_conservation_score(valid_windows)
+            identity_percentage = self._calculate_identity_percentage(valid_windows)
+            consensus_sequence = self._generate_consensus(valid_windows)
+            
+            # Calculate additional metrics
+            gc_content = self._calculate_gc_content(consensus_sequence)
+            complexity_score = self._calculate_sequence_complexity(valid_windows)
             
             results.append({
                 'start': pos + 1,
@@ -407,9 +507,10 @@ class NCBIGenomeAnalyzer:
                 'identity_percentage': identity_percentage,
                 'consensus_sequence': consensus_sequence,
                 'gc_content': gc_content,
-                'num_sequences': len(windows),
+                'complexity_score': complexity_score,
+                'num_sequences': len(valid_windows),
                 'length': window_size,
-                'individual_windows': windows
+                'individual_windows': valid_windows
             })
             
             if i % 50 == 0:
@@ -417,48 +518,73 @@ class NCBIGenomeAnalyzer:
         
         progress_bar.progress(1.0)
         df = pd.DataFrame(results)
-        st.success(f"Comparative analysis complete: {len(df)} windows analyzed")
+        st.success(f"Analysis complete: {len(df)} windows analyzed from {analysis_length} bp")
         return df
     
     def _calculate_conservation_score(self, windows: List[str]) -> float:
-        """Calculate conservation score across all sequences"""
+        """Calculate conservation score with weighted scoring instead of binary threshold"""
         if not windows or len(windows) < 2:
             return 0.0
         
         window_length = len(windows[0])
-        conserved_positions = 0
+        total_conservation = 0.0
         
         for pos in range(window_length):
             bases = [window[pos] for window in windows if pos < len(window)]
             if not bases:
                 continue
             
+            # Count each base type
             base_counts = {}
             for base in bases:
                 base_counts[base] = base_counts.get(base, 0) + 1
             
+            # Calculate conservation as the fraction of the most common base
             max_count = max(base_counts.values())
             conservation_ratio = max_count / len(bases)
             
-            if conservation_ratio >= 0.8:
-                conserved_positions += 1
+            # Use weighted scoring instead of binary threshold
+            if conservation_ratio >= 0.9:
+                position_score = 1.0
+            elif conservation_ratio >= 0.8:
+                position_score = 0.8
+            elif conservation_ratio >= 0.7:
+                position_score = 0.6
+            elif conservation_ratio >= 0.6:
+                position_score = 0.4
+            elif conservation_ratio >= 0.5:
+                position_score = 0.2
+            else:
+                position_score = 0.0
+            
+            total_conservation += position_score
         
-        return conserved_positions / window_length
+        return total_conservation / window_length
     
     def _calculate_identity_percentage(self, windows: List[str]) -> float:
-        """Calculate percentage where ALL sequences are identical"""
+        """Calculate percentage where sequences are highly similar (not requiring 100% identity)"""
         if not windows or len(windows) < 2:
             return 0.0
         
         window_length = len(windows[0])
-        identical_positions = 0
+        similar_positions = 0
         
         for pos in range(window_length):
             bases = [window[pos] for window in windows if pos < len(window)]
-            if len(set(bases)) == 1:
-                identical_positions += 1
+            if not bases:
+                continue
+                
+            # Count base frequencies
+            base_counts = {}
+            for base in bases:
+                base_counts[base] = base_counts.get(base, 0) + 1
+            
+            # Consider position "similar" if dominant base is >70%
+            max_count = max(base_counts.values())
+            if max_count / len(bases) >= 0.7:
+                similar_positions += 1
         
-        return (identical_positions / window_length) * 100
+        return (similar_positions / window_length) * 100
     
     def _generate_consensus(self, windows: List[str]) -> str:
         """Generate consensus sequence"""
@@ -482,6 +608,43 @@ class NCBIGenomeAnalyzer:
             consensus += most_common_base
         
         return consensus
+    
+    def _calculate_gc_content(self, sequence: str) -> float:
+        """Calculate GC content safely"""
+        if not sequence:
+            return 0.0
+        valid_bases = [b for b in sequence.upper() if b in 'ATGCU']
+        if not valid_bases:
+            return 0.0
+        gc_count = sum(1 for b in valid_bases if b in 'GC')
+        return (gc_count / len(valid_bases)) * 100
+
+    def _calculate_sequence_complexity(self, windows: List[str]) -> float:
+        """Calculate sequence complexity (Shannon entropy)"""
+        if not windows:
+            return 0.0
+        
+        # Combine all windows to calculate overall complexity
+        combined_seq = ''.join(windows)
+        
+        # Count base frequencies
+        base_counts = {}
+        for base in combined_seq:
+            if base in 'ATGCU':
+                base_counts[base] = base_counts.get(base, 0) + 1
+        
+        if not base_counts:
+            return 0.0
+        
+        total_bases = sum(base_counts.values())
+        entropy = 0.0
+        
+        for count in base_counts.values():
+            if count > 0:
+                p = count / total_bases
+                entropy -= p * np.log2(p)
+        
+        return entropy
 
 def create_conservation_map(sequences: Dict[str, str], results_df: pd.DataFrame) -> go.Figure:
     """Create a clear graphical conservation map with color-coded regions"""
@@ -1023,6 +1186,14 @@ def main():
             st.warning("Please enter a species name")
             st.stop()
         
+        # Test mode option
+        st.subheader("Testing & Debugging")
+        test_mode = st.checkbox("Use synthetic test data", 
+                               help="Generate test sequences with known conservation patterns")
+        
+        if test_mode:
+            st.info("Test mode: Will generate synthetic sequences with predefined conservation patterns")
+        
         # Organism type selection (removed auto-detect)
         organism_type = st.selectbox(
             "Organism type:",
@@ -1108,19 +1279,44 @@ def main():
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        if st.button("Search Genome Sequences", type="primary"):
-            analyzer = NCBIGenomeAnalyzer(email, organism_type)
-            
-            with st.spinner(f"Searching for {species} sequences..."):
-                sequences = analyzer.search_genomes(species, max_sequences)
-            
-            if sequences:
-                st.session_state['sequences'] = sequences
-                st.session_state['species'] = species
-                st.session_state['organism_type'] = organism_type
-                st.success(f"Found {len(sequences)} sequences for {species}")
-            else:
-                st.error(f"No sequences found for {species}")
+        if test_mode:
+            if st.button("Generate Test Sequences", type="primary"):
+                analyzer = NCBIGenomeAnalyzer(email, organism_type)
+                
+                with st.spinner("Generating test sequences..."):
+                    test_sequences = analyzer.generate_test_sequences(species, max_sequences)
+                    
+                    # Store as if they were real sequences
+                    test_seq_list = []
+                    for seq_id, sequence in test_sequences.items():
+                        test_seq_list.append({
+                            'sequence_id': seq_id,
+                            'title': f'Synthetic test sequence {seq_id}',
+                            'organism': species,
+                            'length': len(sequence),
+                            'source': 'synthetic'
+                        })
+                    
+                    st.session_state['sequences'] = test_seq_list
+                    st.session_state['test_sequences'] = test_sequences
+                    st.session_state['species'] = species
+                    st.session_state['organism_type'] = organism_type
+                    
+                st.success("Test sequences generated! You can now run analysis to verify the tool works.")
+        else:
+            if st.button("Search Genome Sequences", type="primary"):
+                analyzer = NCBIGenomeAnalyzer(email, organism_type)
+                
+                with st.spinner(f"Searching for {species} sequences..."):
+                    sequences = analyzer.search_genomes(species, max_sequences)
+                
+                if sequences:
+                    st.session_state['sequences'] = sequences
+                    st.session_state['species'] = species
+                    st.session_state['organism_type'] = organism_type
+                    st.success(f"Found {len(sequences)} sequences for {species}")
+                else:
+                    st.error(f"No sequences found for {species}")
     
     with col2:
         if st.button("Test NCBI Connection"):
@@ -1165,8 +1361,13 @@ def main():
             
             with st.spinner(f"Performing comparative conservation analysis on {num_to_analyze} sequences..."):
                 try:
-                    # Fetch sequences
-                    sequences = analyzer.fetch_all_sequences_simultaneously(sequence_ids[:num_to_analyze])
+                    # Use test sequences if available, otherwise fetch from NCBI
+                    if 'test_sequences' in st.session_state:
+                        sequences = st.session_state['test_sequences']
+                        st.info("Using synthetic test sequences for analysis")
+                    else:
+                        # Fetch sequences
+                        sequences = analyzer.fetch_all_sequences_simultaneously(sequence_ids[:num_to_analyze])
                     
                     if len(sequences) < 1:
                         st.error("Could not fetch any sequences")
@@ -1251,7 +1452,7 @@ def main():
         with col2:
             st.metric("Windows Analyzed", len(df_results))
         with col3:
-            highly_conserved = len(df_results[df_results['conservation_score'] >= 0.8])
+            highly_conserved = len(df_results[df_results['conservation_score'] >= 0.6])
             st.metric("Highly Conserved Regions", highly_conserved)
         with col4:
             avg_identity = df_results['identity_percentage'].mean()

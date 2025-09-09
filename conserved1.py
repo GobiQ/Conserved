@@ -15,10 +15,15 @@ except ImportError:
         gc_count = seq.count('G') + seq.count('C')
         total_count = len(seq)
         if total_count == 0:
-            # Organism-specific interpretation
-        if organism_type == "Viroid":
-            with st.expander("🧬 Understanding Viroid Results"):
-                st.markdown("""
+            return 0.0
+        
+        return (gc_count / total_count) * 100
+
+def show_organism_specific_info(organism_type: str):
+    """Show organism-specific information and interpretation"""
+    if organism_type == "Viroid":
+        with st.expander("🧬 Understanding Viroid Results"):
+            st.markdown("""
                 **Viroid-Specific Analysis:**
                 
                 🧬 **What are Viroids?**
@@ -45,9 +50,9 @@ except ImportError:
                 - Secondary structure prediction would require specialized RNA folding tools
                 - Conservation analysis here is compositional, not comparative between species
                 """)
-        elif organism_type == "Virus":
-            with st.expander("🦠 Understanding Viral Results"):
-                st.markdown("""
+    elif organism_type == "Virus":
+        with st.expander("🦠 Understanding Viral Results"):
+            st.markdown("""
                 **Viral Genome Analysis:**
                 
                 🦠 **Viral Genome Features:**
@@ -67,10 +72,10 @@ except ImportError:
                 - **Balanced Composition**: Functional constraints on codon usage
                 - **Low Repeat Content**: Compact genomes minimize redundancy
                 """)
-        
-        # Enhanced troubleshooting for small organisms
-        with st.expander("🔧 Troubleshooting (Updated for Small Organisms)"):
-            st.markdown("""
+    
+    # Enhanced troubleshooting for small organisms
+    with st.expander("🔧 Troubleshooting (Updated for Small Organisms)"):
+        st.markdown("""
             **Organism-Specific Issues:**
             
             **🧬 Viroid-Specific Problems:**
@@ -89,10 +94,10 @@ except ImportError:
             - Check sequence orientation (some may be reverse complement)
             - Consider that many small pathogen sequences are synthetic or cloned
             """)
-                
-        # Updated information panel
-        with st.expander("ℹ️ About This Tool (Updated for All Organism Types)"):
-            st.markdown("""
+    
+    # Updated information panel
+    with st.expander("ℹ️ About This Tool (Updated for All Organism Types)"):
+        st.markdown("""
             **Multi-Organism Genome Analysis Tool:**
             
             This tool now automatically adapts to different organism types:
@@ -125,9 +130,6 @@ except ImportError:
             - Sequence length limits appropriate for organism size
             - Organism-specific result interpretation
             """)
-        
-        return 0.0
-        return (gc_count / total_count) * 100
 import requests
 import io
 import time

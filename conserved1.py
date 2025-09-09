@@ -681,8 +681,163 @@ def main():
                 else:
                     st.error("❌ Failed to fetch genome sequence. Try a different sequence.")
     
-    # Display results
-    if 'analysis_results' in st.session_state and not st.session_state['analysis_results'].empty:
+    # Display comparative results
+    if 'comparative_results' in st.session_state and not st.session_state['comparative_results'].empty:
+        organism_type = st.session_state.get('organism_type', 'Unknown')
+        
+        st.header("🔬 Comparative Conservation Analysis Results")
+        
+        df_results = st.session_state['comparative_results']
+        compared_sequences = st.session_state['compared_sequences']
+        num_sequences = st.session_state['num_sequences_compared']
+        sequence_ids = st.session_state['sequence_ids_compared']
+        
+        # Summary statistics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Sequences Compared", num_sequences)
+        with col2:
+            st.metric("Windows Analyzed", len(df_results))
+        with col3:
+            highly_conserved = len(df_results[df_results['conservation_score'] >= 0.8])
+            st.metric("Highly Conserved Regions", highly_conserved)
+        with col4:
+            avg_identity = df_results['identity_percentage'].mean()
+            st.metric("Average Identity", f"{avg_identity:.1f}%")
+        
+        # Show sequence information
+        with st.expander("📋 Sequences Analyzed"):
+            for seq_id, sequence in compared_sequences.items():
+                st.write(f"**{seq_id}**: {len(sequence)} bp")
+        
+        # Conservation visualization
+        st.subheader("🔬 Conservation Landscape")
+        
+        fig = make_subplots(
+            rows=3, cols=1,
+            shared_xaxes=True,
+            subplot_titles=(
+                'Conservation Score (fraction of sequences conserved)', 
+                'Identity Percentage (all sequences identical)', 
+                'GC Content of Consensus'
+            ),
+            vertical_spacing=0.08
+        )
+        
+        # Conservation Score
+        fig.add_trace(
+            go.Scatter(x=df_results['start'], y=df_results['conservation_score'], 
+                      mode='lines', name='Conservation Score', line=dict(color='purple', width=2)),
+            row=1, col=1
+        )
+        
+        # Identity Percentage
+        fig.add_trace(
+            go.Scatter(x=df_results['start'], y=df_results['identity_percentage'], 
+                      mode='lines', name='Identity %', line=dict(color='red', width=2)),
+            row=2, col=1
+        )
+        
+        # GC Content
+        fig.add_trace(
+            go.Scatter(x=df_results['start'], y=df_results['gc_content'], 
+                      mode='lines', name='GC Content', line=dict(color='blue', width=2)),
+            row=3, col=1
+        )
+        
+        fig.update_layout(height=700, showlegend=False, 
+                         title_text=f"Comparative Analysis: {st.session_state.get('species', 'Unknown')} ({num_sequences} sequences)")
+        fig.update_xaxes(title_text="Genomic Position (bp)", row=3, col=1)
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Most conserved regions with actual sequences
+        st.subheader("🎯 Most Conserved Regions with Sequences")
+        
+        # Filter for highly conserved regions
+        highly_conserved_regions = df_results[df_results['conservation_score'] >= 0.8].copy()
+        
+        if not highly_conserved_regions.empty:
+            # Sort by conservation score
+            highly_conserved_regions = highly_conserved_regions.sort_values('conservation_score', ascending=False)
+            
+            st.write(f"Found {len(highly_conserved_regions)} highly conserved regions (≥80% conservation)")
+            
+            # Display top regions with sequences
+            num_top_regions = min(10, len(highly_conserved_regions))
+            
+            for i, (idx, region) in enumerate(highly_conserved_regions.head(num_top_regions).iterrows()):
+                with st.expander(f"Region {i+1}: Position {region['start']}-{region['end']} (Conservation: {region['conservation_score']:.1%})"):
+                    col1, col2 = st.columns([1, 2])
+                    
+                    with col1:
+                        st.metric("Conservation Score", f"{region['conservation_score']:.1%}")
+                        st.metric("Identity Percentage", f"{region['identity_percentage']:.1f}%")
+                        st.metric("GC Content", f"{region['gc_content']:.1f}%")
+                        st.metric("Length", f"{region['length']} bp")
+                    
+                    with col2:
+                        st.write("**Consensus Sequence:**")
+                        consensus_seq = region['consensus_sequence']
+                        
+                        # Format sequence nicely (60 characters per line)
+                        formatted_consensus = ""
+                        for j in range(0, len(consensus_seq), 60):
+                            line_num = j // 60 + 1
+                            line_seq = consensus_seq[j:j+60]
+                            formatted_consensus += f"{line_num:3d}: {line_seq}\n"
+                        
+                        st.code(formatted_consensus, language=None)
+                        
+                        # Show individual sequences for comparison
+                        st.write("**Individual Sequences in this Region:**")
+                        region_start = region['start'] - 1  # Convert to 0-based
+                        region_end = region['end']
+                        
+                        for seq_id, full_sequence in compared_sequences.items():
+                            if region_end <= len(full_sequence):
+                                region_sequence = full_sequence[region_start:region_end]
+                                st.code(f"{seq_id}: {region_sequence}", language=None)
+            
+            # Download option for conserved regions
+            csv = highly_conserved_regions.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Conserved Regions (CSV)",
+                data=csv,
+                file_name=f"conserved_regions_comparative_{st.session_state.get('species', 'unknown').replace(' ', '_')}.csv",
+                mime="text/csv"
+            )
+            
+        else:
+            st.info("No highly conserved regions found (≥80% conservation). Try adjusting parameters or including more sequences.")
+        
+        # Conservation statistics
+        st.subheader("📊 Conservation Statistics")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Conservation score distribution
+            fig_hist = px.histogram(
+                df_results, x='conservation_score', nbins=20,
+                title='Conservation Score Distribution',
+                labels={'conservation_score': 'Conservation Score', 'count': 'Number of Windows'}
+            )
+            st.plotly_chart(fig_hist, use_container_width=True)
+        
+        with col2:
+            # Identity vs Conservation scatter
+            fig_scatter = px.scatter(
+                df_results, x='conservation_score', y='identity_percentage',
+                color='gc_content',
+                title='Conservation vs Identity',
+                labels={
+                    'conservation_score': 'Conservation Score',
+                    'identity_percentage': 'Identity Percentage (%)',
+                    'gc_content': 'GC Content (%)'
+                }
+            )
+            st.plotly_chart(fig_scatter, use_container_width=True)
         organism_type = st.session_state.get('organism_type', 'Unknown')
         
         # Display results with organism-specific insights

@@ -63,19 +63,83 @@ class NCBIGenomeAnalyzer:
             handle.close()
             
             assemblies = []
-            for summary in summaries:
-                assemblies.append({
-                    'assembly_id': summary['AssemblyAccession'],
-                    'assembly_name': summary['AssemblyName'],
-                    'organism': summary['Organism'],
-                    'level': summary['AssemblyLevel'],
-                    'stats': summary['AssemblyStats']
-                })
+            
+            # Handle different response formats from esummary
+            if isinstance(summaries, dict):
+                # If summaries is a dict, it might be keyed by ID
+                summaries_list = list(summaries.values())
+            else:
+                # If it's already a list
+                summaries_list = summaries
+            
+            for summary in summaries_list:
+                try:
+                    # Safely access dictionary keys with fallbacks
+                    assembly_id = summary.get('AssemblyAccession', summary.get('AccessionVersion', 'Unknown'))
+                    assembly_name = summary.get('AssemblyName', summary.get('AssemblyName', 'Unknown'))
+                    organism = summary.get('Organism', summary.get('SpeciesName', 'Unknown'))
+                    level = summary.get('AssemblyLevel', summary.get('AssemblyLevel', 'Unknown'))
+                    stats = summary.get('AssemblyStats', summary.get('Stats', {}))
+                    
+                    assemblies.append({
+                        'assembly_id': assembly_id,
+                        'assembly_name': assembly_name,
+                        'organism': organism,
+                        'level': level,
+                        'stats': stats
+                    })
+                except Exception as item_error:
+                    # Skip problematic entries but continue processing
+                    st.warning(f"Skipping assembly due to parsing error: {str(item_error)}")
+                    continue
             
             return assemblies
             
         except Exception as e:
             st.error(f"Error searching genomes: {str(e)}")
+            # Add debug information
+            st.error(f"Debug info - search_term: {search_term if 'search_term' in locals() else 'Not defined'}")
+            
+            # Try a simpler search as fallback
+            try:
+                st.info("Trying simpler search method...")
+                return self._simple_genome_search(species, max_results)
+            except Exception as fallback_error:
+                st.error(f"Fallback search also failed: {str(fallback_error)}")
+                return []
+    
+    def _simple_genome_search(self, species: str, max_results: int = 20) -> List[Dict]:
+        """Simpler genome search as fallback"""
+        try:
+            # Simple search without filters
+            search_term = f'{species}[Organism]'
+            handle = Entrez.esearch(
+                db="assembly", 
+                term=search_term, 
+                retmax=max_results,
+                sort="relevance"
+            )
+            search_results = Entrez.read(handle)
+            handle.close()
+            
+            if not search_results['IdList']:
+                return []
+            
+            # Get basic assembly info
+            assemblies = []
+            for assembly_id in search_results['IdList'][:max_results]:
+                assemblies.append({
+                    'assembly_id': assembly_id,
+                    'assembly_name': f"Assembly {assembly_id}",
+                    'organism': species,
+                    'level': 'Unknown',
+                    'stats': {}
+                })
+            
+            return assemblies
+            
+        except Exception as e:
+            st.error(f"Simple search failed: {str(e)}")
             return []
     
     def fetch_genome_sequence(self, assembly_id: str, chromosome: str = "1") -> Optional[str]:
@@ -253,6 +317,22 @@ def main():
                 st.success(f"Found {len(assemblies)} genome assemblies")
             else:
                 st.error("No genome assemblies found for the specified species")
+    
+    with col2:
+        if st.button("Test NCBI Connection"):
+            with st.spinner("Testing NCBI connection..."):
+                try:
+                    # Simple test search
+                    handle = Entrez.esearch(db="assembly", term="Escherichia coli", retmax=1)
+                    test_results = Entrez.read(handle)
+                    handle.close()
+                    
+                    if test_results.get('IdList'):
+                        st.success("✅ NCBI connection successful!")
+                    else:
+                        st.warning("⚠️ NCBI connection working but no results found")
+                except Exception as e:
+                    st.error(f"❌ NCBI connection failed: {str(e)}")
     
     # Display assemblies
     if 'assemblies' in st.session_state:

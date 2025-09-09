@@ -316,6 +316,23 @@ def main():
         with col1:
             st.metric("Total Sequence Length", f"{sequence_length:,} bp")
         with col2:
+        if st.button("Test NCBI Connection"):
+            with st.spinner("Testing NCBI connection..."):
+                try:
+                    # Simple test search
+                    handle = Entrez.esearch(db="assembly", term="Escherichia coli", retmax=1)
+                    test_results = Entrez.read(handle)
+                    handle.close()
+                    
+                    if test_results.get('IdList'):
+                        st.success("✅ NCBI connection successful!")
+                        if debug_mode:
+                            st.json(test_results)
+                    else:
+                        st.warning("⚠️ NCBI connection working but no results found")
+                except Exception as e:
+                    st.error(f"❌ NCBI connection failed: {str(e)}")
+    
             st.metric("Windows Analyzed", len(df_results))
         with col3:
             st.metric("Conserved Regions", len(conserved_regions))

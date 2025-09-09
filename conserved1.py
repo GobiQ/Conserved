@@ -392,6 +392,244 @@ class NCBIGenomeAnalyzer:
         
         return consensus
 
+def create_alignment_heatmap(sequences: Dict[str, str], results_df: pd.DataFrame) -> go.Figure:
+    """Create a heatmap showing sequence alignment across all positions"""
+    seq_ids = list(sequences.keys())
+    seq_list = list(sequences.values())
+    
+    # Get the length to analyze (use shortest sequence)
+    min_length = min(len(seq) for seq in seq_list)
+    analysis_length = min(min_length, 1000)  # Limit for visualization performance
+    
+    # Create base identity matrix
+    base_to_num = {'A': 1, 'T': 2, 'G': 3, 'C': 4, 'U': 2, 'N': 0, '-': 0}
+    
+    # Build matrix for heatmap
+    matrix = []
+    for seq_id, sequence in sequences.items():
+        row = [base_to_num.get(base, 0) for base in sequence[:analysis_length]]
+        matrix.append(row)
+    
+    # Create heatmap
+    fig = go.Figure(data=go.Heatmap(
+        z=matrix,
+        x=list(range(1, analysis_length + 1)),
+        y=seq_ids,
+        colorscale=[
+            [0, 'white'],      # Gaps/Unknown
+            [0.25, 'red'],     # A
+            [0.5, 'blue'],     # T/U  
+            [0.75, 'green'],   # G
+            [1, 'orange']      # C
+        ],
+        showscale=True,
+        colorbar=dict(
+            title="Base Type",
+            tickvals=[0.5, 1.5, 2.5, 3.5],
+            ticktext=["Gap/N", "A", "T/U", "G", "C"]
+        )
+    ))
+    
+    fig.update_layout(
+        title="Sequence Alignment Heatmap (Colored by Base Type)",
+        xaxis_title="Genomic Position (bp)",
+        yaxis_title="Sequences",
+        height=max(300, len(seq_ids) * 50),
+        xaxis=dict(showgrid=True, gridwidth=1, gridcolor='lightgray'),
+        yaxis=dict(showgrid=True, gridwidth=1, gridcolor='lightgray')
+    )
+    
+    return fig
+
+def create_conservation_track(results_df: pd.DataFrame, sequences: Dict[str, str]) -> go.Figure:
+    """Create a detailed conservation track showing conservation at each position"""
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        subplot_titles=('Conservation Score by Position', 'Base Composition at Each Position'),
+        vertical_spacing=0.1,
+        row_heights=[0.6, 0.4]
+    )
+    
+    # Top plot: Conservation score
+    fig.add_trace(
+        go.Scatter(
+            x=results_df['start'], 
+            y=results_df['conservation_score'],
+            mode='lines+markers',
+            name='Conservation Score',
+            line=dict(color='purple', width=2),
+            marker=dict(size=4),
+            hovertemplate='Position: %{x}<br>Conservation: %{y:.2f}<extra></extra>'
+        ),
+        row=1, col=1
+    )
+    
+    # Add conservation threshold line
+    fig.add_hline(y=0.8, line_dash="dash", line_color="red", 
+                  annotation_text="High Conservation (80%)", row=1, col=1)
+    
+    # Bottom plot: Base composition diversity
+    # Calculate base diversity for each window
+    diversity_scores = []
+    for _, row in results_df.iterrows():
+        windows = row.get('individual_windows', [])
+        if windows:
+            # Calculate Shannon diversity for each position in the window
+            window_diversity = []
+            for pos in range(len(windows[0])):
+                bases = [window[pos] for window in windows if pos < len(window)]
+                base_counts = {}
+                for base in bases:
+                    base_counts[base] = base_counts.get(base, 0) + 1
+                
+                # Shannon diversity
+                total = sum(base_counts.values())
+                diversity = 0
+                for count in base_counts.values():
+                    if count > 0:
+                        p = count / total
+                        diversity -= p * np.log2(p)
+                window_diversity.append(diversity)
+            
+            avg_diversity = np.mean(window_diversity) if window_diversity else 0
+        else:
+            avg_diversity = 0
+        
+        diversity_scores.append(avg_diversity)
+    
+    fig.add_trace(
+        go.Scatter(
+            x=results_df['start'],
+            y=diversity_scores,
+            mode='lines',
+            name='Base Diversity',
+            line=dict(color='green', width=2),
+            hovertemplate='Position: %{x}<br>Diversity: %{y:.2f}<extra></extra>'
+        ),
+        row=2, col=1
+    )
+    
+    fig.update_layout(
+        title="Conservation Track Analysis",
+        height=600,
+        showlegend=True
+    )
+    
+    fig.update_xaxes(title_text="Genomic Position (bp)", row=2, col=1)
+    fig.update_yaxes(title_text="Conservation Score", row=1, col=1)
+    fig.update_yaxes(title_text="Base Diversity", row=2, col=1)
+    
+    return fig
+
+def create_sequence_browser(sequences: Dict[str, str], results_df: pd.DataFrame):
+    """Create an interactive sequence browser"""
+    seq_ids = list(sequences.keys())
+    
+    # Position selector
+    max_position = min(len(seq) for seq in sequences.values())
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        start_pos = st.number_input(
+            "Start position:", 
+            min_value=1, 
+            max_value=max_position-50, 
+            value=1,
+            help="Select starting position for sequence view"
+        )
+    
+    with col2:
+        window_length = st.selectbox(
+            "View window size:",
+            [50, 100, 200, 500],
+            index=0,
+            help="Number of bases to show"
+        )
+    
+    end_pos = min(start_pos + window_length - 1, max_position)
+    
+    # Extract sequences for the selected region
+    st.write(f"**Showing positions {start_pos}-{end_pos}:**")
+    
+    # Create alignment display
+    alignment_data = []
+    for seq_id, sequence in sequences.items():
+        seq_segment = sequence[start_pos-1:end_pos]
+        alignment_data.append({
+            'Sequence ID': seq_id,
+            'Sequence': seq_segment,
+            'Length': len(seq_segment)
+        })
+    
+    # Display as formatted text with position markers
+    st.write("**Position markers:**")
+    
+    # Create position ruler
+    ruler_top = ""
+    ruler_bottom = ""
+    for i in range(len(alignment_data[0]['Sequence'])):
+        pos = start_pos + i
+        if pos % 10 == 0:
+            ruler_top += str(pos)[-2] if pos >= 10 else " "
+            ruler_bottom += str(pos)[-1]
+        else:
+            ruler_top += " "
+            ruler_bottom += str(pos)[-1] if pos % 5 == 0 else "."
+    
+    st.code(f"     {ruler_top}\n     {ruler_bottom}")
+    
+    # Display sequences with conservation highlighting
+    for data in alignment_data:
+        seq_id = data['Sequence ID']
+        sequence = data['Sequence']
+        
+        # Color code based on conservation
+        colored_sequence = ""
+        for i, base in enumerate(sequence):
+            pos = start_pos + i
+            
+            # Find conservation score for this position
+            conservation_score = 0
+            for _, row in results_df.iterrows():
+                if row['start'] <= pos <= row['end']:
+                    conservation_score = row['conservation_score']
+                    break
+            
+            # Color based on conservation level
+            if conservation_score >= 0.8:
+                colored_sequence += f"🟢{base}"  # High conservation
+            elif conservation_score >= 0.6:
+                colored_sequence += f"🟡{base}"  # Medium conservation
+            else:
+                colored_sequence += f"🔴{base}"  # Low conservation
+        
+        st.write(f"**{seq_id[:20]}:** {colored_sequence}")
+    
+    # Legend
+    st.write("**Legend:** 🟢 High conservation (≥80%) | 🟡 Medium conservation (60-80%) | 🔴 Low conservation (<60%)")
+    
+    # Show conservation statistics for this region
+    region_stats = results_df[
+        (results_df['start'] >= start_pos) & 
+        (results_df['end'] <= end_pos)
+    ]
+    
+    if not region_stats.empty:
+        avg_conservation = region_stats['conservation_score'].mean()
+        max_conservation = region_stats['conservation_score'].max()
+        min_conservation = region_stats['conservation_score'].min()
+        
+        st.write(f"**Region Statistics (positions {start_pos}-{end_pos}):**")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Average Conservation", f"{avg_conservation:.2f}")
+        with col2:
+            st.metric("Maximum Conservation", f"{max_conservation:.2f}")
+        with col3:
+            st.metric("Minimum Conservation", f"{min_conservation:.2f}")
+
 def test_ncbi_connection(email: str) -> bool:
     """Test NCBI connection"""
     try:

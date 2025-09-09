@@ -681,6 +681,11 @@ def main():
                 else:
                     st.error("❌ Failed to fetch genome sequence. Try a different sequence.")
     
+    # Debug: Check what's in session state
+    st.write("Debug - Session state keys:", list(st.session_state.keys()))
+    if 'comparative_results' in st.session_state:
+        st.write("Debug - Comparative results shape:", st.session_state['comparative_results'].shape)
+    
     # Display comparative results
     if 'comparative_results' in st.session_state and not st.session_state['comparative_results'].empty:
         organism_type = st.session_state.get('organism_type', 'Unknown')

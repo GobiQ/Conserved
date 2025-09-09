@@ -1452,8 +1452,9 @@ def main():
         with col2:
             st.metric("Windows Analyzed", len(df_results))
         with col3:
-            highly_conserved = len(df_results[df_results['conservation_score'] >= 0.6])
-            st.metric("Highly Conserved Regions", highly_conserved)
+            # Show the top conservation score instead of counting regions above threshold
+            max_conservation = df_results['conservation_score'].max()
+            st.metric("Highest Conservation Score", f"{max_conservation:.1%}")
         with col4:
             avg_identity = df_results['identity_percentage'].mean()
             st.metric("Average Identity", f"{avg_identity:.1f}%")
@@ -1497,16 +1498,47 @@ def main():
         # Most conserved regions with sequences
         st.subheader("Most Conserved Regions with Sequences")
         
-        highly_conserved_regions = df_results[df_results['conservation_score'] >= 0.5].copy()
+        # Always show the most conserved regions, regardless of absolute conservation level
+        all_regions = df_results.copy()
+        all_regions = all_regions.sort_values('conservation_score', ascending=False)
         
-        if not highly_conserved_regions.empty:
-            highly_conserved_regions = highly_conserved_regions.sort_values('conservation_score', ascending=False)
+        # Show top regions (up to 20, or all if fewer than 20)
+        num_top_regions = min(20, len(all_regions))
+        top_conserved_regions = all_regions.head(num_top_regions)
+        
+        if not top_conserved_regions.empty:
+            # Calculate statistics for context
+            max_conservation = top_conserved_regions['conservation_score'].max()
+            min_conservation = top_conserved_regions['conservation_score'].min()
+            avg_conservation = top_conserved_regions['conservation_score'].mean()
             
-            st.write(f"Found {len(highly_conserved_regions)} highly conserved regions (≥80% conservation)")
+            st.write(f"Showing top {len(top_conserved_regions)} most conserved regions")
+            st.write(f"Conservation range: {min_conservation:.1%} - {max_conservation:.1%} (avg: {avg_conservation:.1%})")
             
-            num_top_regions = min(10, len(highly_conserved_regions))
+            # Add context about conservation levels
+            if max_conservation < 0.3:
+                st.info("⚠️ Low overall conservation detected. These are the most conserved regions available, even though conservation is generally low.")
+                st.write("💡 **Tip:** Consider using smaller window sizes or including more sequences to improve conservation detection.")
+            elif max_conservation < 0.6:
+                st.info("ℹ️ Moderate conservation detected. These regions show the highest conservation levels in your dataset.")
+                st.write("💡 **Tip:** These regions may still be biologically significant despite moderate conservation scores.")
+            else:
+                st.success("✅ High conservation detected. These regions show strong conservation across sequences.")
             
-            for i, (idx, region) in enumerate(highly_conserved_regions.head(num_top_regions).iterrows()):
+            # Show conservation distribution
+            st.write("**Conservation Score Distribution:**")
+            conservation_stats = top_conserved_regions['conservation_score'].describe()
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Max", f"{conservation_stats['max']:.1%}")
+            with col2:
+                st.metric("75th percentile", f"{conservation_stats['75%']:.1%}")
+            with col3:
+                st.metric("Median", f"{conservation_stats['50%']:.1%}")
+            with col4:
+                st.metric("Min", f"{conservation_stats['min']:.1%}")
+            
+            for i, (idx, region) in enumerate(top_conserved_regions.iterrows()):
                 with st.expander(f"Region {i+1}: Position {region['start']}-{region['end']} (Conservation: {region['conservation_score']:.1%})"):
                     col1, col2 = st.columns([1, 2])
                     
@@ -1540,16 +1572,16 @@ def main():
                                 st.code(f"{seq_id}: {region_sequence}", language=None)
             
             # Download option
-            csv = highly_conserved_regions.to_csv(index=False)
+            csv = top_conserved_regions.to_csv(index=False)
             st.download_button(
-                label="Download Conserved Regions (CSV)",
+                label="Download Most Conserved Regions (CSV)",
                 data=csv,
-                file_name=f"conserved_regions_{st.session_state.get('species', 'unknown').replace(' ', '_')}.csv",
+                file_name=f"most_conserved_regions_{st.session_state.get('species', 'unknown').replace(' ', '_')}.csv",
                 mime="text/csv"
             )
             
         else:
-            st.info("No highly conserved regions found (≥80% conservation). Try adjusting parameters or including more sequences.")
+            st.warning("No regions found for analysis. This might indicate an issue with the sequence data or analysis parameters.")
 
 if __name__ == "__main__":
     main()

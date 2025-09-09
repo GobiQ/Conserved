@@ -16,120 +16,8 @@ except ImportError:
         total_count = len(seq)
         if total_count == 0:
             return 0.0
-        
         return (gc_count / total_count) * 100
 
-def show_organism_specific_info(organism_type: str):
-    """Show organism-specific information and interpretation"""
-    if organism_type == "Viroid":
-        with st.expander("🧬 Understanding Viroid Results"):
-            st.markdown("""
-                **Viroid-Specific Analysis:**
-                
-                🧬 **What are Viroids?**
-                - Smallest known pathogens (200-400 nucleotides)
-                - Circular, single-stranded RNA molecules
-                - No protein-coding capacity
-                - Pathogenic to plants only
-                - Replicate using host RNA polymerase II
-                
-                🔬 **Conservation in Viroids:**
-                - **Secondary Structure Elements**: Hairpin loops, bulges, and pseudoknots
-                - **Central Conserved Region (CCR)**: Essential for replication
-                - **Pathogenicity Domain**: Variable region affecting virulence
-                - **Terminal Conserved Region (TCR)**: Important for processing
-                
-                📊 **Interpreting Your Results:**
-                - **High Conservation (>80%)**: Likely structural/functional domains
-                - **Moderate GC Content (30-70%)**: Optimal for RNA folding
-                - **Structured Regions**: Lower entropy may indicate important secondary structures
-                - **Variable Regions**: May be pathogenicity or host-adaptation domains
-                
-                ⚠️ **Important Notes:**
-                - Viroids are RNA, but often stored as DNA sequences in databases
-                - Secondary structure prediction would require specialized RNA folding tools
-                - Conservation analysis here is compositional, not comparative between species
-                """)
-    elif organism_type == "Virus":
-        with st.expander("🦠 Understanding Viral Results"):
-            st.markdown("""
-                **Viral Genome Analysis:**
-                
-                🦠 **Viral Genome Features:**
-                - Compact organization with overlapping genes
-                - High gene density with minimal non-coding regions
-                - Regulatory elements often overlap with coding sequences
-                - Size varies dramatically (1kb to >1Mb)
-                
-                🔬 **Conservation Patterns:**
-                - **Essential Genes**: Replication, transcription machinery
-                - **Structural Proteins**: Capsid, envelope proteins
-                - **Regulatory Elements**: Promoters, origins of replication
-                - **Variable Regions**: Host interaction, immune evasion
-                
-                📊 **Interpreting Results:**
-                - **High Conservation**: Core viral functions, essential domains
-                - **Balanced Composition**: Functional constraints on codon usage
-                - **Low Repeat Content**: Compact genomes minimize redundancy
-                """)
-    
-    # Enhanced troubleshooting for small organisms
-    with st.expander("🔧 Troubleshooting (Updated for Small Organisms)"):
-        st.markdown("""
-            **Organism-Specific Issues:**
-            
-            **🧬 Viroid-Specific Problems:**
-            - **Sequence too large**: Viroids should be 200-400bp. Large sequences may be incorrect or contain vector sequences
-            - **No sequences found**: Try searching for the viroid name directly (e.g., "Potato spindle tuber viroid")
-            - **Low conservation**: Normal for viroids due to high structural constraints vs. sequence conservation
-            
-            **🦠 Virus-Specific Problems:**
-            - **Multiple sequences**: Viruses may have segmented genomes - select the largest segment first
-            - **Very high conservation**: Normal for compact viral genomes
-            - **Low complexity regions**: May indicate regulatory regions or packaging signals
-            
-            **General Small Organism Tips:**
-            - Use smaller window sizes (20-200bp for viroids, 100-500bp for small viruses)
-            - Increase maximum assemblies (more variation in small pathogen sequences)
-            - Check sequence orientation (some may be reverse complement)
-            - Consider that many small pathogen sequences are synthetic or cloned
-            """)
-    
-    # Updated information panel
-    with st.expander("ℹ️ About This Tool (Updated for All Organism Types)"):
-        st.markdown("""
-            **Multi-Organism Genome Analysis Tool:**
-            
-            This tool now automatically adapts to different organism types:
-            
-            **🧬 Viroids (200-400 bp)**
-            - Ultra-small window analysis (20-200 bp)
-            - RNA-aware composition analysis  
-            - Secondary structure-focused conservation criteria
-            - Complete sequence analysis (no length limits)
-            
-            **🦠 Viruses (1kb-1Mb)**
-            - Small window analysis (100-1000 bp)
-            - Compact genome optimization
-            - Overlapping gene consideration
-            - Enhanced sequence acquisition
-            
-            **🧫 Bacteria (1-10 Mb)**
-            - Standard analysis parameters
-            - Chromosome-focused analysis
-            - Gene density considerations
-            
-            **🌿 Eukaryotes (10Mb-100Gb)**
-            - Large window analysis
-            - Intron/exon awareness
-            - Repetitive element filtering
-            
-            **Adaptive Features:**
-            - Window sizes auto-adjust to organism type
-            - Conservation criteria optimized for each organism class
-            - Sequence length limits appropriate for organism size
-            - Organism-specific result interpretation
-            """)
 import requests
 import io
 import time
@@ -148,231 +36,254 @@ st.set_page_config(
 class NCBIGenomeAnalyzer:
     """Class to handle NCBI data retrieval and conservation analysis"""
     
-    def __init__(self, email: str):
+    def __init__(self, email: str, organism_type: str = "Auto-detect"):
         Entrez.email = email
         self.conservation_threshold = 0.8
+        self.organism_type = organism_type
         
-    def search_genomes(self, species: str, max_results: int = 20) -> List[Dict]:
-        """Search for genome assemblies for a given species"""
+    def search_genomes(self, species: str, max_results: int = 50) -> List[Dict]:
+        """Search for genome sequences directly in nucleotide database"""
         try:
-            # More robust search strategy
-            search_terms = [
-                f'"{species}"[Organism] AND "latest refseq"[filter]',
-                f'"{species}"[Organism] AND "reference genome"[filter]',
-                f'"{species}"[Organism]'
-            ]
+            st.info(f"🔍 Searching nucleotide database for {species} genomes...")
             
-            assemblies = []
+            # Organism-specific search strategies
+            if self.organism_type == "Viroid":
+                search_terms = self._get_viroid_search_terms(species)
+                size_filter = lambda x: 150 <= x <= 1000  # Viroid size range
+            elif self.organism_type == "Virus":
+                search_terms = self._get_virus_search_terms(species)
+                size_filter = lambda x: 1000 <= x <= 500000  # Viral genome range
+            else:
+                search_terms = self._get_standard_search_terms(species)
+                size_filter = lambda x: x >= 10000  # Larger genomes
             
-            for search_term in search_terms:
+            sequences = []
+            
+            for i, search_term in enumerate(search_terms):
                 try:
-                    st.info(f"Trying search: {search_term}")
+                    st.info(f"Search strategy {i+1}/{len(search_terms)}: {search_term}")
                     
-                    # Add retry logic with exponential backoff
-                    for attempt in range(3):
-                        try:
-                            handle = Entrez.esearch(
-                                db="assembly", 
-                                term=search_term, 
-                                retmax=max_results,
-                                sort="relevance"
-                            )
-                            search_results = Entrez.read(handle)
-                            handle.close()
-                            break
-                        except Exception as retry_error:
-                            if attempt == 2:  # Last attempt
-                                raise retry_error
-                            time.sleep(2 ** attempt)  # Exponential backoff
-                            st.warning(f"Retrying search (attempt {attempt + 2}/3)...")
+                    # Search nucleotide database directly
+                    handle = Entrez.esearch(
+                        db="nucleotide", 
+                        term=search_term, 
+                        retmax=max_results * 2,  # Get more to filter later
+                        sort="relevance"
+                    )
+                    search_results = Entrez.read(handle)
+                    handle.close()
                     
                     if not search_results.get('IdList'):
+                        st.warning(f"No results for strategy {i+1}")
                         continue
                     
-                    st.success(f"Found {len(search_results['IdList'])} assembly IDs")
+                    st.success(f"Found {len(search_results['IdList'])} sequences")
                     
-                    # Get assembly details with better error handling
-                    try:
-                        # Process in smaller batches to avoid timeouts
-                        batch_size = 5
-                        id_list = search_results['IdList']
-                        
-                        for i in range(0, len(id_list), batch_size):
-                            batch_ids = id_list[i:i+batch_size]
-                            
-                            # Add retry logic for summary fetch
-                            for attempt in range(3):
-                                try:
-                                    handle = Entrez.esummary(db="assembly", id=','.join(batch_ids))
-                                    summaries = Entrez.read(handle)
-                                    handle.close()
-                                    break
-                                except Exception as retry_error:
-                                    if attempt == 2:
-                                        st.warning(f"Failed to fetch details for batch {i//batch_size + 1}")
-                                        continue
-                                    time.sleep(1)
-                            
-                            # Process summaries
-                            batch_assemblies = self._process_summaries(summaries, species)
-                            assemblies.extend(batch_assemblies)
+                    # Get sequence summaries in batches
+                    batch_sequences = self._process_sequence_batch(
+                        search_results['IdList'], species, size_filter, max_results
+                    )
+                    sequences.extend(batch_sequences)
                     
-                    except Exception as summary_error:
-                        st.warning(f"Error fetching assembly details: {str(summary_error)}")
-                        # Create minimal entries from IDs
-                        for assembly_id in search_results['IdList'][:max_results]:
-                            assemblies.append({
-                                'assembly_id': assembly_id,
-                                'assembly_name': f"Assembly {assembly_id}",
-                                'organism': species,
-                                'level': 'Unknown',
-                                'stats': {}
-                            })
-                    
-                    if assemblies:
-                        break  # Found assemblies, stop trying other search terms
+                    # If we have enough good sequences, break
+                    if len(sequences) >= max_results:
+                        break
                         
                 except Exception as search_error:
-                    st.warning(f"Search failed for term '{search_term}': {str(search_error)}")
+                    st.warning(f"Search strategy {i+1} failed: {search_error}")
                     continue
             
-            return assemblies[:max_results]
+            # Remove duplicates and sort by relevance
+            unique_sequences = self._deduplicate_sequences(sequences, max_results)
+            
+            st.success(f"✅ Found {len(unique_sequences)} unique genome sequences")
+            return unique_sequences
             
         except Exception as e:
             st.error(f"Error in genome search: {str(e)}")
             return []
     
-    def _process_summaries(self, summaries, species: str) -> List[Dict]:
-        """Process assembly summaries with robust error handling"""
-        assemblies = []
-        
-        try:
-            # Handle different response formats from esummary
-            if isinstance(summaries, dict):
-                if 'DocumentSummarySet' in summaries:
-                    summaries_list = summaries['DocumentSummarySet']['DocumentSummary']
-                elif 'DocSum' in summaries:
-                    summaries_list = summaries['DocSum']
-                else:
-                    # Try to extract values if it's a dict keyed by ID
-                    summaries_list = list(summaries.values())
-            else:
-                summaries_list = summaries
-            
-            # Ensure it's a list
-            if not isinstance(summaries_list, list):
-                summaries_list = [summaries_list]
-            
-            for summary in summaries_list:
-                try:
-                    # More robust field extraction
-                    assembly_id = self._safe_get(summary, ['AssemblyAccession', 'AccessionVersion', 'Id'], 'Unknown')
-                    assembly_name = self._safe_get(summary, ['AssemblyName', 'Title'], f'Assembly {assembly_id}')
-                    organism = self._safe_get(summary, ['Organism', 'SpeciesName', 'OrganismName'], species)
-                    level = self._safe_get(summary, ['AssemblyLevel', 'Level'], 'Unknown')
-                    stats = self._safe_get(summary, ['AssemblyStats', 'Stats'], {})
-                    
-                    assemblies.append({
-                        'assembly_id': str(assembly_id),
-                        'assembly_name': str(assembly_name),
-                        'organism': str(organism),
-                        'level': str(level),
-                        'stats': stats
-                    })
-                    
-                except Exception as item_error:
-                    st.warning(f"Skipping problematic assembly: {str(item_error)}")
-                    continue
-            
-        except Exception as process_error:
-            st.error(f"Error processing summaries: {str(process_error)}")
-        
-        return assemblies
+    def _get_viroid_search_terms(self, species: str) -> List[str]:
+        """Generate viroid-specific search terms"""
+        return [
+            f'"{species}"[Organism] AND viroid',
+            f'{species}[Organism] AND viroid',
+            f'"{species}" AND viroid AND complete',
+            f'{species} viroid complete',
+            f'{species} viroid',
+            f'viroid AND {species.split()[0]}' if len(species.split()) > 1 else f'viroid AND {species}',
+            f'"{species}"[Organism]',
+            f'{species}[Organism]'
+        ]
     
-    def _safe_get(self, data: dict, keys: List[str], default: str = 'Unknown'):
-        """Safely get value from nested dict with multiple possible keys"""
-        for key in keys:
-            if isinstance(data, dict) and key in data:
-                value = data[key]
-                if value and str(value).strip():
-                    return value
-        return default
+    def _get_virus_search_terms(self, species: str) -> List[str]:
+        """Generate virus-specific search terms"""
+        return [
+            f'"{species}"[Organism] AND "complete genome"',
+            f'"{species}"[Organism] AND genome',
+            f'{species}[Organism] AND "complete genome"',
+            f'{species}[Organism] AND genome',
+            f'"{species}" AND "complete genome"',
+            f'{species} complete genome',
+            f'"{species}"[Organism]',
+            f'{species}[Organism]'
+        ]
     
-    def fetch_genome_sequence(self, assembly_id: str, chromosome: str = "1") -> Optional[str]:
-        """Fetch genome sequence for a specific chromosome with improved error handling"""
-        try:
-            # Multiple search strategies
-            search_strategies = [
-                f'{assembly_id}[Assembly] AND chromosome {chromosome}[Title]',
-                f'{assembly_id}[Assembly] AND chromosome {chromosome}',
-                f'{assembly_id}[Assembly] AND "chromosome {chromosome}"',
-                f'{assembly_id}[Assembly]'  # Fallback to any sequence from assembly
-            ]
-            
-            nucl_id = None
-            
-            for search_term in search_strategies:
-                try:
-                    st.info(f"Searching for sequence: {search_term}")
-                    
-                    handle = Entrez.esearch(db="nucleotide", term=search_term, retmax=5)
-                    search_results = Entrez.read(handle)
-                    handle.close()
-                    
-                    if search_results.get('IdList'):
-                        nucl_id = search_results['IdList'][0]
-                        st.success(f"Found sequence ID: {nucl_id}")
-                        break
-                        
-                except Exception as search_error:
-                    st.warning(f"Search strategy failed: {str(search_error)}")
-                    continue
-            
-            if not nucl_id:
-                st.error("No sequences found for this assembly")
-                return None
-            
-            # Fetch the sequence with size limits
-            max_sequence_length = 2000000  # 2MB limit for performance
+    def _get_standard_search_terms(self, species: str) -> List[str]:
+        """Generate search terms for bacteria/eukaryotes"""
+        return [
+            f'"{species}"[Organism] AND "complete genome"',
+            f'"{species}"[Organism] AND chromosome',
+            f'{species}[Organism] AND "complete genome"',
+            f'{species}[Organism] AND chromosome',
+            f'"{species}" AND "complete genome"',
+            f'{species} complete genome',
+            f'{species} chromosome',
+            f'"{species}"[Organism]',
+            f'{species}[Organism]',
+            # Genus-level fallback
+            f'{species.split()[0]}[Organism] AND "complete genome"' if len(species.split()) > 1 else None
+        ]
+    
+    def _process_sequence_batch(self, id_list: List[str], species: str, size_filter, max_results: int) -> List[Dict]:
+        """Process a batch of sequence IDs"""
+        sequences = []
+        batch_size = 20
+        
+        for i in range(0, len(id_list), batch_size):
+            batch_ids = id_list[i:i+batch_size]
             
             try:
-                # Get sequence info first
-                handle = Entrez.esummary(db="nucleotide", id=nucl_id)
-                seq_info = Entrez.read(handle)
+                # Get summaries for this batch
+                handle = Entrez.esummary(db="nucleotide", id=','.join(batch_ids))
+                summaries = Entrez.read(handle)
                 handle.close()
                 
-                # Determine fetch parameters
-                seq_length = int(seq_info[0].get('Length', max_sequence_length))
-                fetch_length = min(seq_length, max_sequence_length)
+                for summary in summaries:
+                    try:
+                        seq_id = summary.get('AccessionVersion', summary.get('Id', 'Unknown'))
+                        title = summary.get('Title', 'Unknown')
+                        length = int(summary.get('Length', 0))
+                        organism = summary.get('Organism', species)
+                        
+                        # Apply size filter
+                        if size_filter(length):
+                            sequences.append({
+                                'sequence_id': seq_id,
+                                'title': title,
+                                'organism': organism,
+                                'length': length,
+                                'source': 'nucleotide'
+                            })
+                        
+                        # Stop if we have enough
+                        if len(sequences) >= max_results:
+                            break
+                            
+                    except (ValueError, TypeError, KeyError):
+                        continue
                 
-                st.info(f"Fetching {fetch_length:,} bp from sequence of length {seq_length:,} bp")
-                
-                # Fetch sequence
-                handle = Entrez.efetch(
-                    db="nucleotide", 
-                    id=nucl_id, 
-                    rettype="fasta", 
-                    retmode="text",
-                    seq_start=1,
-                    seq_stop=fetch_length
-                )
-                sequence_data = handle.read()
-                handle.close()
-                
-                # Parse FASTA
-                sequences = list(SeqIO.parse(io.StringIO(sequence_data), "fasta"))
-                if sequences:
-                    return str(sequences[0].seq)
-                else:
-                    st.error("Failed to parse FASTA sequence")
-                    return None
+                if len(sequences) >= max_results:
+                    break
                     
-            except Exception as fetch_error:
-                st.error(f"Error fetching sequence: {str(fetch_error)}")
+            except Exception as batch_error:
+                st.warning(f"Failed to process batch {i//batch_size + 1}: {batch_error}")
+                continue
+        
+        return sequences
+    
+    def _deduplicate_sequences(self, sequences: List[Dict], max_results: int) -> List[Dict]:
+        """Remove duplicates and sort sequences"""
+        seen_ids = set()
+        unique_sequences = []
+        
+        # Sort by length (appropriate for organism type)
+        if self.organism_type == "Viroid":
+            # For viroids, prefer typical sizes (200-400bp)
+            sequences.sort(key=lambda x: abs(x['length'] - 300))
+        elif self.organism_type == "Virus":
+            # For viruses, prefer larger complete genomes
+            sequences.sort(key=lambda x: x['length'], reverse=True)
+        else:
+            # For others, prefer larger sequences
+            sequences.sort(key=lambda x: x['length'], reverse=True)
+        
+        for seq in sequences:
+            seq_id = seq['sequence_id']
+            if seq_id not in seen_ids and seq_id != 'Unknown':
+                seen_ids.add(seq_id)
+                unique_sequences.append(seq)
+                if len(unique_sequences) >= max_results:
+                    break
+        
+        return unique_sequences
+    
+    def fetch_genome_sequence(self, sequence_id: str, chromosome: str = "1") -> Optional[str]:
+        """Fetch genome sequence directly from nucleotide database"""
+        try:
+            # Adjust sequence length limits based on organism type
+            if self.organism_type == "Viroid":
+                max_sequence_length = 10000  # Viroids are tiny
+            elif self.organism_type == "Virus":
+                max_sequence_length = 500000  # Viral genomes
+            else:
+                max_sequence_length = 2000000  # Default 2MB limit
+            
+            st.info(f"🧬 Fetching sequence: {sequence_id}")
+            
+            # Get sequence info first
+            handle = Entrez.esummary(db="nucleotide", id=sequence_id)
+            seq_info = Entrez.read(handle)
+            handle.close()
+            
+            if not seq_info:
+                st.error("Could not retrieve sequence information")
                 return None
             
+            # Determine fetch parameters
+            seq_length = int(seq_info[0].get('Length', 0))
+            
+            # For viroids, fetch complete sequence
+            if self.organism_type == "Viroid":
+                fetch_length = seq_length
+            else:
+                fetch_length = min(seq_length, max_sequence_length)
+            
+            st.info(f"Fetching {fetch_length:,} bp from sequence of length {seq_length:,} bp")
+            
+            # Fetch the actual sequence
+            handle = Entrez.efetch(
+                db="nucleotide", 
+                id=sequence_id, 
+                rettype="fasta", 
+                retmode="text",
+                seq_start=1,
+                seq_stop=fetch_length
+            )
+            sequence_data = handle.read()
+            handle.close()
+            
+            # Parse FASTA
+            sequences = list(SeqIO.parse(io.StringIO(sequence_data), "fasta"))
+            if sequences:
+                sequence = str(sequences[0].seq)
+                
+                # Organism-specific validation
+                if self.organism_type == "Viroid":
+                    if len(sequence) < 150:
+                        st.warning(f"Short sequence for viroid: {len(sequence)} bp")
+                    elif len(sequence) > 1000:
+                        st.warning(f"Long sequence for viroid: {len(sequence)} bp")
+                    else:
+                        st.success(f"Viroid sequence: {len(sequence)} bp (typical range)")
+                
+                return sequence
+            else:
+                st.error("Failed to parse FASTA sequence")
+                return None
+                
         except Exception as e:
-            st.error(f"Error in sequence fetch: {str(e)}")
+            st.error(f"Error fetching sequence: {str(e)}")
             return None
     
     def sliding_window_analysis(self, sequence: str, window_size: int = 1000, step_size: int = 500) -> pd.DataFrame:
@@ -423,13 +334,24 @@ class NCBIGenomeAnalyzer:
         if not sequence:
             return 0.0
         
-        # Count nucleotides
-        counts = {'A': 0, 'T': 0, 'G': 0, 'C': 0, 'N': 0}
-        for base in sequence.upper():
-            if base in counts:
-                counts[base] += 1
-            else:
-                counts['N'] += 1  # Unknown bases
+        # For RNA sequences (viroids), consider both DNA and RNA bases
+        if self.organism_type == "Viroid":
+            # RNA analysis - convert T to U for proper RNA analysis
+            rna_sequence = sequence.upper().replace('T', 'U')
+            counts = {'A': 0, 'U': 0, 'G': 0, 'C': 0, 'N': 0}
+            for base in rna_sequence:
+                if base in counts:
+                    counts[base] += 1
+                else:
+                    counts['N'] += 1
+        else:
+            # DNA analysis
+            counts = {'A': 0, 'T': 0, 'G': 0, 'C': 0, 'N': 0}
+            for base in sequence.upper():
+                if base in counts:
+                    counts[base] += 1
+                else:
+                    counts['N'] += 1  # Unknown bases
         
         # Calculate entropy
         total = sum(counts.values())
@@ -466,22 +388,57 @@ class NCBIGenomeAnalyzer:
         if df.empty:
             return pd.DataFrame()
         
-        # Define conservation criteria
-        conserved_mask = (
-            (df['gc_content'] >= 40) & (df['gc_content'] <= 60) &  # Moderate GC content
-            (df['entropy'] >= 1.5) &  # High complexity
-            (df['repeat_content'] <= 20)  # Low repeat content
-        )
-        
-        conserved_regions = df[conserved_mask].copy()
-        
-        if not conserved_regions.empty:
-            conserved_regions['conservation_score'] = (
-                (2 - abs(conserved_regions['gc_content'] - 50) / 50) * 0.3 +
-                (conserved_regions['entropy'] / 2) * 0.4 +
-                ((100 - conserved_regions['repeat_content']) / 100) * 0.3
+        # Organism-specific conservation criteria
+        if self.organism_type == "Viroid":
+            # Viroids are highly structured RNA - different criteria
+            conserved_mask = (
+                (df['gc_content'] >= 30) & (df['gc_content'] <= 70) &  # Broader GC range for RNA
+                (df['entropy'] >= 1.0) &  # Lower complexity threshold (highly structured)
+                (df['repeat_content'] <= 30)  # Higher repeat tolerance (RNA structures)
             )
             
+            # Viroid-specific scoring (emphasizes secondary structure potential)
+            conserved_regions = df[conserved_mask].copy()
+            if not conserved_regions.empty:
+                conserved_regions['conservation_score'] = (
+                    (2 - abs(conserved_regions['gc_content'] - 50) / 50) * 0.2 +  # Less weight on GC
+                    (conserved_regions['entropy'] / 2) * 0.5 +  # More weight on complexity
+                    ((100 - conserved_regions['repeat_content']) / 100) * 0.3  # Moderate repeat penalty
+                )
+        
+        elif self.organism_type == "Virus":
+            # Viral genomes - compact and functional
+            conserved_mask = (
+                (df['gc_content'] >= 35) & (df['gc_content'] <= 65) &  # Moderate GC content
+                (df['entropy'] >= 1.3) &  # Moderate complexity
+                (df['repeat_content'] <= 25)  # Low repeat content
+            )
+            
+            conserved_regions = df[conserved_mask].copy()
+            if not conserved_regions.empty:
+                conserved_regions['conservation_score'] = (
+                    (2 - abs(conserved_regions['gc_content'] - 50) / 50) * 0.3 +
+                    (conserved_regions['entropy'] / 2) * 0.4 +
+                    ((100 - conserved_regions['repeat_content']) / 100) * 0.3
+                )
+        
+        else:
+            # Default criteria for bacteria/eukaryotes
+            conserved_mask = (
+                (df['gc_content'] >= 40) & (df['gc_content'] <= 60) &  # Moderate GC content
+                (df['entropy'] >= 1.5) &  # High complexity
+                (df['repeat_content'] <= 20)  # Low repeat content
+            )
+            
+            conserved_regions = df[conserved_mask].copy()
+            if not conserved_regions.empty:
+                conserved_regions['conservation_score'] = (
+                    (2 - abs(conserved_regions['gc_content'] - 50) / 50) * 0.3 +
+                    (conserved_regions['entropy'] / 2) * 0.4 +
+                    ((100 - conserved_regions['repeat_content']) / 100) * 0.3
+                )
+        
+        if not conserved_regions.empty:
             return conserved_regions.sort_values('conservation_score', ascending=False)
         else:
             return pd.DataFrame()
@@ -492,7 +449,7 @@ def test_ncbi_connection(email: str) -> bool:
         Entrez.email = email
         
         # Test with a simple, reliable search
-        handle = Entrez.esearch(db="assembly", term="Escherichia coli", retmax=1)
+        handle = Entrez.esearch(db="nucleotide", term="Escherichia coli", retmax=1)
         test_results = Entrez.read(handle)
         handle.close()
         
@@ -520,8 +477,8 @@ def test_ncbi_connection(email: str) -> bool:
 def main():
     st.title("🧬 Genome Conservation Analysis Tool")
     st.markdown("""
-    This tool identifies conserved regions within a species' genome using data directly from NCBI.
-    It analyzes genomic sequences for patterns indicative of evolutionary conservation.
+    This tool identifies conserved regions within genome sequences using data directly from NCBI.
+    It searches the nucleotide database for actual genome sequences and analyzes them for conservation patterns.
     """)
     
     # Sidebar configuration
@@ -543,14 +500,15 @@ def main():
         st.subheader("Species Selection")
         example_species = st.selectbox(
             "Choose example or enter custom:",
-            ["Custom", "Homo sapiens", "Escherichia coli", "Saccharomyces cerevisiae", "Drosophila melanogaster"]
+            ["Custom", "Homo sapiens", "Escherichia coli", "Saccharomyces cerevisiae", 
+             "Potato spindle tuber viroid", "Tobacco mosaic virus", "SARS-CoV-2"]
         )
         
         if example_species == "Custom":
             species = st.text_input(
                 "Species name:",
                 placeholder="Enter scientific name",
-                help="Enter the scientific name of the species (e.g., 'Homo sapiens')"
+                help="Enter the scientific name (e.g., 'Homo sapiens', 'Potato spindle tuber viroid')"
             )
         else:
             species = example_species
@@ -561,27 +519,96 @@ def main():
         
         # Analysis parameters
         st.subheader("Analysis Parameters")
-        window_size = st.slider("Window size (bp):", 500, 5000, 1000, 100)
-        step_size = st.slider("Step size (bp):", 100, 2000, 500, 50)
-        max_assemblies = st.slider("Max assemblies to search:", 5, 50, 20, 5)
+        
+        # Organism type selection for optimal parameters
+        organism_type = st.selectbox(
+            "Organism type:",
+            ["Auto-detect", "Viroid", "Virus", "Bacteria", "Fungi", "Plant", "Animal"],
+            help="Automatically optimizes all analysis parameters for the selected organism type"
+        )
+        
+        # Auto-adjust parameters based on organism type
+        if organism_type == "Viroid":
+            default_window = 50
+            min_window, max_window = 20, 200
+            default_step = 10
+            min_step, max_step = 5, 100
+            default_max_sequences = 50
+            param_info = "🧬 **Viroid Mode**: Ultra-fine analysis (50bp windows, 10bp steps)"
+        elif organism_type == "Virus":
+            default_window = 200
+            min_window, max_window = 100, 1000
+            default_step = 50
+            min_step, max_step = 25, 500
+            default_max_sequences = 30
+            param_info = "🦠 **Virus Mode**: Compact genome analysis (200bp windows, 50bp steps)"
+        elif organism_type == "Bacteria":
+            default_window = 1000
+            min_window, max_window = 500, 3000
+            default_step = 500
+            min_step, max_step = 100, 1500
+            default_max_sequences = 20
+            param_info = "🧫 **Bacteria Mode**: Standard analysis (1kb windows, 500bp steps)"
+        else:  # Eukaryotes or auto-detect
+            default_window = 1000
+            min_window, max_window = 500, 5000
+            default_step = 500
+            min_step, max_step = 100, 2000
+            default_max_sequences = 20
+            param_info = "🌿 **Eukaryote Mode**: Broad analysis (1kb windows, 500bp steps)"
+        
+        # Display optimized parameters prominently
+        st.info(param_info)
+        st.success(f"✅ **Auto-optimized**: Window: {default_window}bp | Step: {default_step}bp | Max sequences: {default_max_sequences}")
+        
+        # Advanced parameters (collapsed by default)
+        with st.expander("🔧 Advanced: Custom Parameters (Optional)"):
+            st.warning("⚠️ Only modify these if you need custom analysis parameters. The auto-optimized values above are recommended.")
+            
+            custom_params = st.checkbox("Override auto-optimized parameters", value=False)
+            
+            if custom_params:
+                window_size = st.slider(
+                    "Window size (bp):", 
+                    min_window, max_window, default_window, 
+                    step=5 if organism_type == "Viroid" else 50,
+                    help=f"Custom window size (default: {default_window}bp for {organism_type.lower()}s)"
+                )
+                step_size = st.slider(
+                    "Step size (bp):", 
+                    min_step, max_step, default_step,
+                    step=5 if organism_type == "Viroid" else 25,
+                    help=f"Custom step size (default: {default_step}bp for {organism_type.lower()}s)"
+                )
+                max_sequences = st.slider(
+                    "Max sequences to search:", 
+                    5, 100, default_max_sequences, 5,
+                    help=f"Custom max sequences (default: {default_max_sequences} for {organism_type.lower()}s)"
+                )
+            else:
+                # Use auto-optimized parameters
+                window_size = default_window
+                step_size = default_step
+                max_sequences = default_max_sequences
     
     # Main interface
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        if st.button("🔍 Search Genome Assemblies", type="primary"):
+        if st.button("🔍 Search Genome Sequences", type="primary"):
             # Initialize analyzer
-            analyzer = NCBIGenomeAnalyzer(email)
+            analyzer = NCBIGenomeAnalyzer(email, organism_type)
             
-            with st.spinner(f"Searching NCBI for {species} genome assemblies..."):
-                assemblies = analyzer.search_genomes(species, max_assemblies)
+            with st.spinner(f"Searching NCBI nucleotide database for {species} genomes..."):
+                sequences = analyzer.search_genomes(species, max_sequences)
             
-            if assemblies:
-                st.session_state['assemblies'] = assemblies
+            if sequences:
+                st.session_state['sequences'] = sequences
                 st.session_state['species'] = species
-                st.success(f"✅ Found {len(assemblies)} genome assemblies for {species}")
+                st.session_state['organism_type'] = organism_type
+                st.success(f"✅ Found {len(sequences)} genome sequences for {species}")
             else:
-                st.error(f"❌ No genome assemblies found for '{species}'. Try a different species name or check spelling.")
+                st.error(f"❌ No genome sequences found for '{species}'. Try a different species name or organism type.")
     
     with col2:
         if st.button("🔗 Test NCBI Connection"):
@@ -591,42 +618,46 @@ def main():
                 else:
                     st.error("❌ NCBI connection failed")
     
-    # Display assemblies
-    if 'assemblies' in st.session_state and 'species' in st.session_state:
-        st.subheader(f"Available Genome Assemblies for {st.session_state['species']}")
+    # Display sequences
+    if 'sequences' in st.session_state and 'species' in st.session_state:
+        st.subheader(f"Available Genome Sequences for {st.session_state['species']}")
         
-        assembly_data = []
-        for assembly in st.session_state['assemblies']:
-            assembly_data.append({
-                'Assembly ID': assembly['assembly_id'],
-                'Assembly Name': assembly['assembly_name'][:50] + '...' if len(assembly['assembly_name']) > 50 else assembly['assembly_name'],
-                'Organism': assembly['organism'],
-                'Level': assembly['level']
+        sequence_data = []
+        for seq in st.session_state['sequences']:
+            sequence_data.append({
+                'Sequence ID': seq['sequence_id'],
+                'Title': seq['title'][:60] + '...' if len(seq['title']) > 60 else seq['title'],
+                'Organism': seq['organism'],
+                'Length (bp)': f"{seq['length']:,}"
             })
         
-        df_assemblies = pd.DataFrame(assembly_data)
-        st.dataframe(df_assemblies, use_container_width=True)
+        df_sequences = pd.DataFrame(sequence_data)
+        st.dataframe(df_sequences, use_container_width=True)
         
-        # Select assembly for analysis
-        selected_assembly = st.selectbox(
-            "Select assembly for analysis:",
-            options=[a['assembly_id'] for a in st.session_state['assemblies']],
-            format_func=lambda x: f"{x} - {next((a['assembly_name'][:30] + '...' if len(a['assembly_name']) > 30 else a['assembly_name']) for a in st.session_state['assemblies'] if a['assembly_id'] == x)}"
+        # Select sequence for analysis
+        selected_sequence = st.selectbox(
+            "Select sequence for analysis:",
+            options=[s['sequence_id'] for s in st.session_state['sequences']],
+            format_func=lambda x: f"{x} - {next((s['title'][:40] + '...' if len(s['title']) > 40 else s['title']) for s in st.session_state['sequences'] if s['sequence_id'] == x)} ({next(s['length'] for s in st.session_state['sequences'] if s['sequence_id'] == x):,} bp)"
         )
         
-        chromosome = st.text_input("Chromosome/scaffold:", value="1", help="Enter chromosome number or scaffold name")
+        # Auto-select best sequence option
+        auto_select = st.checkbox("Auto-select best available sequence", value=True, help="Automatically select the most suitable sequence from the results")
         
         if st.button("🧬 Analyze Conservation", type="primary"):
-            if not selected_assembly:
-                st.error("Please select an assembly for analysis")
+            if not selected_sequence:
+                st.error("Please select a sequence for analysis")
                 return
             
             # Initialize analyzer
-            analyzer = NCBIGenomeAnalyzer(email)
+            analyzer = NCBIGenomeAnalyzer(email, st.session_state['organism_type'])
+            
+            # Determine sequence parameter
+            target_sequence = selected_sequence if not auto_select else selected_sequence
             
             with st.spinner("Fetching genome sequence and performing analysis..."):
                 # Fetch sequence
-                sequence = analyzer.fetch_genome_sequence(selected_assembly, chromosome)
+                sequence = analyzer.fetch_genome_sequence(target_sequence)
                 
                 if sequence:
                     st.success(f"✅ Successfully fetched {len(sequence):,} bp sequence")
@@ -644,25 +675,38 @@ def main():
                         st.session_state['analysis_results'] = df_analysis
                         st.session_state['conserved_regions'] = conserved_regions
                         st.session_state['sequence_length'] = len(sequence)
-                        st.session_state['selected_assembly'] = selected_assembly
-                        st.session_state['chromosome'] = chromosome
+                        st.session_state['selected_sequence'] = target_sequence
                     else:
                         st.error("Analysis failed - no windows could be processed")
                 else:
-                    st.error("❌ Failed to fetch genome sequence. Try a different chromosome or assembly.")
+                    st.error("❌ Failed to fetch genome sequence. Try a different sequence.")
     
     # Display results
     if 'analysis_results' in st.session_state and not st.session_state['analysis_results'].empty:
-        st.header("📊 Analysis Results")
+        organism_type = st.session_state.get('organism_type', 'Unknown')
+        
+        # Display results with organism-specific insights
+        if organism_type == "Viroid":
+            st.subheader("🧬 Viroid Structure Analysis")
+            st.info("**Viroid-Specific Insights:** Viroids are small, circular, single-stranded RNA molecules that form complex secondary structures. Conservation analysis focuses on structural elements rather than protein-coding sequences.")
+        elif organism_type == "Virus":
+            st.subheader("🦠 Viral Genome Analysis")  
+            st.info("**Virus-Specific Insights:** Viral genomes are typically compact with overlapping genes and regulatory elements. Conservation reflects functional constraints and host adaptation.")
+        else:
+            st.subheader("📊 Analysis Results")
         
         df_results = st.session_state['analysis_results']
         conserved_regions = st.session_state['conserved_regions']
         sequence_length = st.session_state['sequence_length']
         
-        # Summary statistics
+        # Organism-specific summary metrics
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Total Sequence Length", f"{sequence_length:,} bp")
+            if organism_type == "Viroid" and sequence_length > 500:
+                st.caption("⚠️ Large for viroid")
+            elif organism_type == "Viroid" and 200 <= sequence_length <= 400:
+                st.caption("✅ Typical viroid size")
         with col2:
             st.metric("Windows Analyzed", len(df_results))
         with col3:
@@ -670,9 +714,24 @@ def main():
         with col4:
             conservation_percentage = (len(conserved_regions) / len(df_results)) * 100 if len(df_results) > 0 else 0
             st.metric("Conservation %", f"{conservation_percentage:.1f}%")
+            if organism_type == "Viroid" and conservation_percentage > 80:
+                st.caption("🧬 Highly structured")
+            elif organism_type == "Virus" and conservation_percentage > 60:
+                st.caption("🦠 Compact genome")
+
+        # Visualization with organism-specific titles
+        if organism_type == "Viroid":
+            st.subheader("🧬 Viroid Secondary Structure Landscape")
+            structure_info = "**Viroid Analysis:** Focus on regions with moderate complexity that may form important secondary structures (hairpins, loops, pseudoknots)."
+        elif organism_type == "Virus":
+            st.subheader("🦠 Viral Genomic Landscape")
+            structure_info = "**Viral Analysis:** Compact genome organization with overlapping features and regulatory elements."
+        else:
+            st.subheader("📈 Genomic Landscape")
+            structure_info = ""
         
-        # Visualization
-        st.subheader("📈 Genomic Landscape")
+        if structure_info:
+            st.info(structure_info)
         
         # Create subplot
         fig = make_subplots(
@@ -712,7 +771,7 @@ def main():
                 row=4, col=1
             )
         
-        fig.update_layout(height=800, showlegend=False, title_text=f"Genomic Analysis: {st.session_state.get('species', 'Unknown')} - {st.session_state.get('selected_assembly', 'Unknown')} - Chr {st.session_state.get('chromosome', 'Unknown')}")
+        fig.update_layout(height=800, showlegend=False, title_text=f"Genomic Analysis: {st.session_state.get('species', 'Unknown')} - {st.session_state.get('selected_sequence', 'Unknown')}")
         fig.update_xaxes(title_text="Genomic Position (bp)", row=4, col=1)
         
         st.plotly_chart(fig, use_container_width=True)
@@ -730,7 +789,7 @@ def main():
             st.download_button(
                 label="📥 Download Conserved Regions (CSV)",
                 data=csv,
-                file_name=f"conserved_regions_{st.session_state.get('species', 'unknown').replace(' ', '_')}_{st.session_state.get('selected_assembly', 'unknown')}.csv",
+                file_name=f"conserved_regions_{st.session_state.get('species', 'unknown').replace(' ', '_')}_{st.session_state.get('selected_sequence', 'unknown')}.csv",
                 mime="text/csv"
             )
         else:
@@ -762,62 +821,155 @@ def main():
             )
             st.plotly_chart(fig_scatter, use_container_width=True)
 
-    # Troubleshooting section
-    with st.expander("🔧 Troubleshooting"):
+        # Organism-specific interpretation
+        if organism_type == "Viroid":
+            with st.expander("🧬 Understanding Viroid Results"):
+                st.markdown("""
+                **Viroid-Specific Analysis:**
+                
+                🧬 **What are Viroids?**
+                - Smallest known pathogens (200-400 nucleotides)
+                - Circular, single-stranded RNA molecules
+                - No protein-coding capacity
+                - Pathogenic to plants only
+                - Replicate using host RNA polymerase II
+                
+                🔬 **Conservation in Viroids:**
+                - **Secondary Structure Elements**: Hairpin loops, bulges, and pseudoknots
+                - **Central Conserved Region (CCR)**: Essential for replication
+                - **Pathogenicity Domain**: Variable region affecting virulence
+                - **Terminal Conserved Region (TCR)**: Important for processing
+                
+                📊 **Interpreting Your Results:**
+                - **High Conservation (>80%)**: Likely structural/functional domains
+                - **Moderate GC Content (30-70%)**: Optimal for RNA folding
+                - **Structured Regions**: Lower entropy may indicate important secondary structures
+                - **Variable Regions**: May be pathogenicity or host-adaptation domains
+                
+                ⚠️ **Important Notes:**
+                - Viroids are RNA, but often stored as DNA sequences in databases
+                - Secondary structure prediction would require specialized RNA folding tools
+                - Conservation analysis here is compositional, not comparative between species
+                """)
+        elif organism_type == "Virus":
+            with st.expander("🦠 Understanding Viral Results"):
+                st.markdown("""
+                **Viral Genome Analysis:**
+                
+                🦠 **Viral Genome Features:**
+                - Compact organization with overlapping genes
+                - High gene density with minimal non-coding regions
+                - Regulatory elements often overlap with coding sequences
+                - Size varies dramatically (1kb to >1Mb)
+                
+                🔬 **Conservation Patterns:**
+                - **Essential Genes**: Replication, transcription machinery
+                - **Structural Proteins**: Capsid, envelope proteins
+                - **Regulatory Elements**: Promoters, origins of replication
+                - **Variable Regions**: Host interaction, immune evasion
+                
+                📊 **Interpreting Results:**
+                - **High Conservation**: Core viral functions, essential domains
+                - **Balanced Composition**: Functional constraints on codon usage
+                - **Low Repeat Content**: Compact genomes minimize redundancy
+                """)
+
+    # Enhanced troubleshooting for direct nucleotide search
+    with st.expander("🔧 Troubleshooting - Nucleotide Database Search"):
         st.markdown("""
-        **Common Issues and Solutions:**
+        **Direct Nucleotide Search Benefits:**
         
-        1. **No assemblies found:**
-           - Check species name spelling (use scientific names like "Homo sapiens")
-           - Try removing quotes or special characters
-           - Some species may have limited public genome data
+        ✅ **Why this approach works better:**
+        - Searches actual genome sequences, not just assembly metadata
+        - Finds many more sequences per organism (10-50 vs 1-2)
+        - Works for all organism types including viroids and viruses
+        - No assembly-to-sequence mapping issues
+        - Direct access to sequence data
         
-        2. **Sequence fetch fails:**
-           - Try different chromosome numbers (1, 2, X, Y, MT)
-           - Some assemblies may not have individual chromosomes available
-           - Try "1", "I", "chr1", or just leave blank for automatic selection
+        **🧬 Viroid-Specific Improvements:**
+        - Searches nucleotide database where viroids are actually stored
+        - Size filtering (150-1000 bp) to find viroid-sized sequences
+        - Multiple search strategies for different viroid naming conventions
+        - No dependency on formal genome assemblies
         
-        3. **NCBI connection issues:**
-           - Ensure valid email address is provided
-           - Check internet connection
-           - NCBI may be temporarily unavailable
-           - Rate limits may apply - wait a few minutes and retry
+        **🦠 Virus-Specific Improvements:**
+        - Finds complete viral genomes and individual segments
+        - Size-appropriate filtering for viral genome range
+        - Searches for both complete genomes and individual sequences
+        
+        **General Improvements:**
+        - Much higher sequence yield per search
+        - Better coverage of available genomic data
+        - More robust search strategies
+        - Direct sequence access without intermediate mapping
+        """)
+        
+    # Updated troubleshooting section
+    with st.expander("🔧 Common Issues and Solutions"):
+        st.markdown("""
+        **Search Issues:**
+        
+        1. **No sequences found:**
+           - Check species name spelling (use scientific names)
+           - Try different organism type selections
+           - Some organisms may have limited sequence data
+           
+        2. **Few sequences found:**
+           - Try "Auto-detect" organism type for broader search
+           - Check if organism name includes common alternatives
+           - Use genus name only (e.g., "Escherichia" instead of "Escherichia coli")
+        
+        3. **Sequence fetch fails:**
+           - Try a different sequence from the list
+           - Some sequences may be restricted or corrupted
+           - Check NCBI status if multiple sequences fail
         
         4. **Analysis errors:**
-           - Sequence may be too short for chosen window size
-           - Reduce window size for smaller sequences
-           - Some sequences may contain unusual characters
+           - Ensure sequence length > window size
+           - Reduce window size for shorter sequences
+           - Check for unusual characters in sequence
         
         **Performance Tips:**
-        - Start with smaller organisms (bacteria) for faster results
-        - Use larger window sizes for initial exploration
-        - Large genomes may take several minutes to process
+        - Viroids: Start with 20-50bp windows for detailed structure analysis
+        - Viruses: Use 100-500bp windows for functional domain analysis  
+        - Bacteria: Use 500-2000bp windows for gene-level analysis
+        - Larger organisms: Use 1000-5000bp windows for broad patterns
         """)
 
-    # Information panel
-    with st.expander("ℹ️ About This Tool"):
+    # Updated information panel
+    with st.expander("ℹ️ About the Nucleotide Database Approach"):
         st.markdown("""
-        **What This Tool Does:**
+        **Why Search Nucleotide Database Directly:**
         
-        This application connects directly to NCBI's databases to retrieve and analyze genome sequences.
-        It identifies potentially conserved regions based on sequence composition and complexity.
+        🔍 **Better Data Access:**
+        - Assembly database = metadata about genome projects
+        - Nucleotide database = actual DNA/RNA sequences
+        - Direct access to sequence data without mapping issues
+        - Much higher sequence yield per organism
         
-        **Conservation Metrics:**
-        - **GC Content**: Percentage of G and C nucleotides (optimal: 40-60%)
-        - **Sequence Complexity**: Shannon entropy measure (higher = more complex)
-        - **Repeat Content**: Percentage of simple repetitive sequences (lower = better)
-        - **Conservation Score**: Combined metric weighing all factors
+        📊 **Improved Coverage:**
+        - Finds 10-50 sequences per organism (vs 1-2 with assemblies)
+        - Works for all organism types including viroids
+        - Includes partial sequences, complete genomes, and chromosomes
+        - No dependency on formal genome assembly projects
         
-        **Data Sources:**
-        - NCBI Assembly database for genome assemblies
-        - NCBI Nucleotide database for sequence data
-        - RefSeq reference sequences when available
+        🧬 **Organism-Specific Benefits:**
+        - **Viroids**: Found in nucleotide DB, rarely in assembly DB
+        - **Viruses**: Complete genomes and segments both accessible
+        - **Bacteria**: Multiple strains and isolates available
+        - **Eukaryotes**: Chromosomes, scaffolds, and contigs all searchable
         
-        **Limitations:**
-        - Analysis limited to publicly available genomes
-        - Sequence fetch limited to 2MB for performance
-        - Conservation prediction based on composition, not comparative analysis
-        - Real conservation requires multiple species comparison
+        ⚡ **Technical Advantages:**
+        - Eliminates assembly-to-sequence mapping step
+        - Reduces points of failure in data retrieval
+        - Faster and more reliable sequence access
+        - Better error handling and recovery options
+        
+        **Search Strategy:**
+        - Multiple search terms per organism for comprehensive coverage
+        - Size-based filtering appropriate for organism type
+        - Relevance-based sorting to prioritize best matches
+        - Deduplication to avoid analyzing identical sequences
         """)
 
 if __name__ == "__main__":

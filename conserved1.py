@@ -49,7 +49,7 @@ class NCBIGenomeAnalyzer:
             # Organism-specific search strategies
             if self.organism_type == "Viroid":
                 search_terms = self._get_viroid_search_terms(species)
-                size_filter = lambda x: 150 <= x <= 1000  # Viroid size range
+                size_filter = lambda x: 100 <= x <= 2000  # Broader viroid size range
             elif self.organism_type == "Virus":
                 search_terms = self._get_virus_search_terms(species)
                 size_filter = lambda x: 1000 <= x <= 500000  # Viral genome range

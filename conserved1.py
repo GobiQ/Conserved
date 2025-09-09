@@ -1816,9 +1816,17 @@ def main():
             st.warning("No regions found for analysis. This might indicate an issue with the sequence data or analysis parameters.")
     
     # Custom Sequence Comparison Section
-    if 'compared_sequences' in st.session_state and st.session_state['compared_sequences']:
+    if 'sequences' in st.session_state and st.session_state['sequences']:
         st.header("🔍 Custom Sequence Comparison")
         st.write("Compare your own sequence against the loaded genome sequences to find matches and similarities.")
+        
+        # Show status of available sequences
+        if 'compared_sequences' in st.session_state and st.session_state['compared_sequences']:
+            st.info("✅ Sequences are ready for comparison (already loaded from conservation analysis)")
+        elif 'test_sequences' in st.session_state and st.session_state['test_sequences']:
+            st.info("🧪 Using test sequences for comparison (no NCBI access required)")
+        else:
+            st.info("ℹ️ Sequences will be fetched from NCBI when you search (this may take a moment)")
         
         # Custom sequence input
         col1, col2 = st.columns([2, 1])
@@ -1866,9 +1874,24 @@ def main():
                     
                     with st.spinner("Searching for sequence matches..."):
                         analyzer = NCBIGenomeAnalyzer(email, st.session_state.get('organism_type', 'Bacteria'))
+                        
+                        # Use the best available sequences for comparison
+                        if 'compared_sequences' in st.session_state and st.session_state['compared_sequences']:
+                            sequences_to_search = st.session_state['compared_sequences']
+                        elif 'test_sequences' in st.session_state and st.session_state['test_sequences']:
+                            sequences_to_search = st.session_state['test_sequences']
+                        else:
+                            # Fetch sequences for comparison
+                            sequence_ids = [seq['sequence_id'] for seq in st.session_state['sequences']]
+                            sequences_to_search = analyzer.fetch_all_sequences_simultaneously(sequence_ids)
+                            
+                            if not sequences_to_search:
+                                st.error("Could not fetch sequences for comparison. Please try running the conservation analysis first.")
+                                return
+                        
                         matches_df = analyzer.compare_custom_sequence(
                             clean_sequence, 
-                            st.session_state['compared_sequences'],
+                            sequences_to_search,
                             min_match_length, 
                             max_mismatches
                         )
